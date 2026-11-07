@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SmartSpectra Presage Android SDK OAuth Configuration
+  Reference: https://smartspectra.presagetech.com/docs/android/option-2-oauth/
+
+  In production deployments, OAuth replaces raw API keys in the client APK.
+  Tokens are acquired via authenticated OAuth handshake against Presage's auth server.
+-->
+<presage-oauth-config>
+    <environment>production</environment>
+    <auth-endpoint>https://auth.presagetech.com/oauth2/token</auth-endpoint>
+    <scopes>
+        <scope>metrics:cardio</scope>
+        <scope>metrics:breathing</scope>
+        <scope>insights:llm</scope>
+    </scopes>
+    <!-- Client ID registered in Presage Developer Portal -->
+    <client-id>fitlens-android-client</client-id>
+</presage-oauth-config>

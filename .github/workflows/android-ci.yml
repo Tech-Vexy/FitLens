@@ -1,0 +1,66 @@
+name: FitLens CI - Day 1 Hard Gate & Build Verification
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  verify-architecture-and-tests:
+    name: Architecture, Day 1 Gate & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify No Secrets Committed
+        run: |
+          echo "Verifying secrets.properties is not tracked in Git..."
+          if git ls-files --error-unmatch secrets.properties 2>/dev/null; then
+            echo "ERROR: secrets.properties is tracked in Git! Failing build."
+            exit 1
+          fi
+          echo "PASS: secrets.properties is correctly ignored."
+
+      - name: Verify Zero AI Key in Source & Manifest
+        run: |
+          echo "Verifying zero GEMINI_API_KEY in source files..."
+          if grep -rn "GEMINI_API_KEY" app/src/ 2>/dev/null; then
+            echo "ERROR: Found GEMINI_API_KEY string in source code! Failing build."
+            exit 1
+          fi
+          echo "PASS: Client-side AI keys completely absent (Zero AI Key Architecture)."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Configure Presage API key
+        env:
+          PRESAGE_API_KEY: ${{ secrets.PRESAGE_API_KEY }}
+        run: |
+          if [ -n "$PRESAGE_API_KEY" ]; then
+            printf 'PRESAGE_API_KEY=%s\n' "$PRESAGE_API_KEY" > secrets.properties
+          else
+            echo "PRESAGE_API_KEY is unavailable; using the committed placeholder for this build."
+          fi
+
+      - name: Run Unit Tests (Headless Day 1 Hard Gate Suite)
+        run: ./gradlew test --stacktrace
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitlens-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
