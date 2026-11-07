@@ -55,12 +55,12 @@ jobs:
       - name: Run Unit Tests (Headless Day 1 Hard Gate Suite)
         run: ./gradlew test --stacktrace
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
 
-      - name: Upload Debug APK
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: fitlens-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: fitlens-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
