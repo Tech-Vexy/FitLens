@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("com.google.gms.google-services")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
@@ -64,6 +65,27 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+
+            val releaseKeystore = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+            val releaseKeystorePassword =
+                providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+            val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+            val releaseKeyPassword =
+                providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+
+            if (
+                releaseKeystore != null &&
+                releaseKeystorePassword != null &&
+                releaseKeyAlias != null &&
+                releaseKeyPassword != null
+            ) {
+                signingConfig = signingConfigs.create("ciRelease").apply {
+                    storeFile = file(releaseKeystore)
+                    storePassword = releaseKeystorePassword
+                    keyAlias = releaseKeyAlias
+                    keyPassword = releaseKeyPassword
+                }
+            }
         }
         debug {
             isDebuggable = true
@@ -79,6 +101,19 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            // Classes under test use android.util.Log; return defaults instead of failing on the stub jar.
+            isReturnDefaultValues = true
+        }
+    }
+}
+
+ksp {
+    // Room 2.6.1's Java codegen emits Continuation<T> overrides that clash with Kotlin 2.x
+    // suspend signatures (Continuation<? super T>). Kotlin codegen avoids the mismatch.
+    arg("room.generateKotlin", "true")
 }
 
 secrets {
@@ -145,6 +180,8 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // Real org.json implementation for local unit tests (the mockable android.jar only has stubs).
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     debugImplementation("androidx.compose.ui:ui-tooling")

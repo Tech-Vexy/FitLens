@@ -122,10 +122,10 @@ class FitnessCoachTest {
         val valgusLandmarks = mapOf(
             PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.40f, 0.50f, 0f),
             PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.48f, 0.70f, 0f), // caved inward
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.35f, 0.90f, 0f),
+            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.35f, 0.80f, 0f),
             PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.60f, 0.50f, 0f),
             PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.52f, 0.70f, 0f), // caved inward
-            PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.65f, 0.90f, 0f)
+            PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.65f, 0.80f, 0f)
         )
 
         val frame = manager.analyzeLandmarks(valgusLandmarks)
@@ -158,11 +158,11 @@ class FitnessCoachTest {
         val manager = PoseLandmarkManager()
         manager.setExercise("Lunges")
 
-        // Front knee over-flexed (< 75 deg)
+        // Front knee over-flexed (< 75 deg): knee driven ahead of the trailing ankle
         val deepLungeLandmarks = mapOf(
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.40f, 0.40f, 0f),
-            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.45f, 0.70f, 0f),
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.38f, 0.75f, 0f),
+            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.30f, 0.55f, 0f),
+            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.55f, 0.55f, 0f),
+            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.45f, 0.75f, 0f),
             PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.60f, 0.40f, 0f),
             PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.70f, 0.80f, 0f),
             PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.85f, 0.90f, 0f)
@@ -203,16 +203,17 @@ class FitnessCoachTest {
     fun testPresageHeartRateZones() {
         val analyzer = PresageFrameAnalyzer()
 
+        // Default profile: resting 65 bpm, max 190 bpm -> 50/65/80/90% HRR at 127.5/146.25/165/177.5 bpm
         analyzer.updateVitalsReading(hr = 85.0, hrv = 60.0, breathingRate = 14.0, confidence = 0.9f)
         assertEquals(HeartRateZone.RESTING, analyzer.vitalsFlow.value.heartRateZone)
 
-        analyzer.updateVitalsReading(hr = 115.0, hrv = 45.0, breathingRate = 18.0, confidence = 0.9f)
+        analyzer.updateVitalsReading(hr = 135.0, hrv = 45.0, breathingRate = 18.0, confidence = 0.9f)
         assertEquals(HeartRateZone.WARMUP, analyzer.vitalsFlow.value.heartRateZone)
 
-        analyzer.updateVitalsReading(hr = 140.0, hrv = 30.0, breathingRate = 24.0, confidence = 0.9f)
+        analyzer.updateVitalsReading(hr = 155.0, hrv = 30.0, breathingRate = 24.0, confidence = 0.9f)
         assertEquals(HeartRateZone.AEROBIC, analyzer.vitalsFlow.value.heartRateZone)
 
-        analyzer.updateVitalsReading(hr = 165.0, hrv = 20.0, breathingRate = 30.0, confidence = 0.9f)
+        analyzer.updateVitalsReading(hr = 170.0, hrv = 20.0, breathingRate = 30.0, confidence = 0.9f)
         assertEquals(HeartRateZone.ANAEROBIC, analyzer.vitalsFlow.value.heartRateZone)
 
         analyzer.updateVitalsReading(hr = 182.0, hrv = 15.0, breathingRate = 34.0, confidence = 0.9f)

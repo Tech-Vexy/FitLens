@@ -59,14 +59,15 @@ jobs:
             echo "PRESAGE_API_KEY is unavailable; using the committed placeholder for this build."
           fi
 
-      - name: Configure Firebase
+      - name: Configure Firebase (google-services.json)
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "PASS: google-services.json written from GOOGLE_SERVICES_JSON secret."
           else
-            echo "GOOGLE_SERVICES_JSON is unavailable; Firebase integration checks will be skipped."
+            echo "WARNING: GOOGLE_SERVICES_JSON secret not set; Firebase integration checks will be skipped."
           fi
 
       - name: Configure Android release signing
@@ -77,7 +78,7 @@ jobs:
             echo "ANDROID_KEYSTORE_BASE64 must be configured for signed release builds."
             exit 1
           }
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > fitlens-release.keystore
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fitlens-release.jks"
 
       - name: Run FitLens architecture verification
         run: ./scripts/verify_fitlens.sh
@@ -85,9 +86,12 @@ jobs:
       - name: Run Android lint
         run: ./gradlew lintDebug --stacktrace
 
+      - name: Run Unit Tests (Headless Day 1 Hard Gate Suite)
+        run: ./gradlew test --stacktrace
+
       - name: Build Release APK
         env:
-          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/fitlens-release.keystore
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/fitlens-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -104,6 +108,37 @@ jobs:
           for apk in "${apks[@]}"; do
             "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify "$apk"
           done
+
+      - name: Verify Critical Classes Survived R8 Minification
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          DEXDUMP="$ANDROID_HOME/build-tools/$BUILD_TOOLS/dexdump"
+
+          echo "Verifying critical classes are present in release DEX..."
+          mkdir -p /tmp/apk_inspect
+          # Inspect the arm64 APK (canonical release artifact)
+          unzip -o app/build/outputs/apk/release/app-arm64-v8a-release.apk "classes*.dex" -d /tmp/apk_inspect
+
+          MISSING=0
+          for CLASS in \
+            "com.fitlens.app.FitLensApp" \
+            "com.fitlens.app.MainActivity"; do
+            DESCRIPTOR="L$(echo "$CLASS" | tr '.' '/');"
+            if "$DEXDUMP" -l plain /tmp/apk_inspect/classes*.dex 2>/dev/null | grep -qF "$DESCRIPTOR"; then
+              echo "PASS: $CLASS found in DEX."
+            else
+              echo "FAIL: $CLASS is MISSING from DEX — R8 stripped it!"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          rm -rf /tmp/apk_inspect
+          if [ "$MISSING" -gt 0 ]; then
+            echo "ERROR: $MISSING critical class(es) missing from release APK. App will crash on startup."
+            exit 1
+          fi
+          echo "All critical entry-point classes verified in release DEX."
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4

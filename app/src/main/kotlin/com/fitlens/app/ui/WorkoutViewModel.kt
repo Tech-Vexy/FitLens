@@ -87,14 +87,14 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
         if (metrics.hasCardio()) {
             metrics.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.let {
-                hr = it.value
+                hr = it.value.toDouble()
                 confidence = it.confidence
             }
             metrics.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.let { hrv = it.rmssd }
             metrics.cardio.arterialPressureTraceList.lastOrNull()?.let { trace.add(it.value) }
         }
         if (metrics.hasBreathing()) {
-            metrics.breathing.rateList.lastOrNull()?.let { br = it.value }
+            metrics.breathing.rateList.lastOrNull()?.let { br = it.value.toDouble() }
         }
         if (hr > 0) {
             vitalsAnalyzer.updateVitalsReading(

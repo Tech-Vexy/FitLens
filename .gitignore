@@ -25,6 +25,7 @@ local.properties
 
 # Secrets configuration file - NEVER COMMIT THIS
 secrets.properties
+key.properties
 
 # Firebase project configuration - inject locally or in CI/CD
 app/google-services.json

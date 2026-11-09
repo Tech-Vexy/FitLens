@@ -159,7 +159,12 @@ class PresageFrameAnalyzer(
      * Used by HeadlessVideoFeeder and the Day-1 smoke test when no real camera is available.
      */
     fun simulateExerciseExertion(exertionFactor: Float) {
-        val hr  = (70.0 + exertionFactor * 90.0 + (Math.random() - 0.5) * 4.0).coerceIn(55.0, 195.0)
+        // Map exertion onto the user's own Karvonen reserve so the simulated HR lands in
+        // the zone the exertion factor represents (e.g. 0.85 -> anaerobic).
+        val profile = activeProfile
+        val targetHr = profile.restingHeartRate +
+            exertionFactor * (profile.maxHeartRate - profile.restingHeartRate)
+        val hr  = (targetHr + (Math.random() - 0.5) * 4.0).coerceIn(55.0, 195.0)
         val hrv = (65.0 - exertionFactor * 35.0).coerceIn(15.0, 90.0)
         val br  = (14.0 + exertionFactor * 18.0).coerceIn(10.0, 36.0)
 

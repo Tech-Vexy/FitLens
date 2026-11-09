@@ -14,7 +14,8 @@ import com.fitlens.app.ai.adk.FirebaseGeminiAdapter
  *
  * Supported Authentication & Model Backends:
  * 1. Firebase AI Logic + App Check (Android production):
- *    - Uses FirebaseGeminiAdapter (Zero client API key in APK; gated by Play Integrity).
+ *    - Uses the Agent Platform Gemini API through Firebase AI Logic.
+ *    - Zero client API key in APK; gated by Play Integrity.
  * 2. Google Application Default Credentials (ADC) (Workstations, JVM, CI, Backend proxy):
  *    - Uses AdcVertexGeminiAdapter with Google ADC credentials (gcloud / service account).
  * 3. On-Device Edge Sub-Agent:
@@ -113,7 +114,7 @@ class FitnessCoachAgent(
     }
 
     /**
-     * Generates a multi-week periodization mesocycle via Cloud Gemini 3.8 Flash (Firebase AI Logic / ADC).
+     * Generates a multi-week periodization mesocycle via Gemini 3.8 Flash (Firebase AI Logic / ADC).
      */
     suspend fun requestMesocyclePlan(
         goal: String,

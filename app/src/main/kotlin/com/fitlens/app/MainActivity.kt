@@ -11,11 +11,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FavoriteOutlined
-import androidx.compose.material.icons.filled.Air
-import androidx.compose.material.icons.filled.MonitorHeart
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
@@ -170,7 +165,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(metrics) {
             val m = metrics ?: return@LaunchedEffect
             if (m.hasCardio()) {
-                m.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.value?.let { pulseRate = it }
+                m.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.value?.let { pulseRate = it.toDouble() }
                 m.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.rmssd?.let { hrvRmssd = it }
                 m.cardio.arterialPressureTraceList.forEach { s ->
                     if (s.timestamp > latestPressureTs) {
@@ -181,7 +176,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (m.hasBreathing()) {
-                m.breathing.rateList.lastOrNull()?.value?.let { breathRate = it }
+                m.breathing.rateList.lastOrNull()?.value?.let { breathRate = it.toDouble() }
                 m.breathing.upperTraceList.forEach { s ->
                     if (s.timestamp > latestChestTs) {
                         latestChestTs = s.timestamp

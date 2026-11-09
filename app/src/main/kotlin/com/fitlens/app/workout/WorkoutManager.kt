@@ -168,6 +168,15 @@ class WorkoutManager(
         val capturedHr = _state.value.heartRateBpm
         val baseRest = 45
 
+        // Enter the rest phase synchronously so observers never see a stale ACTIVE_SET
+        // state after completeSet(); the agent result only adjusts the duration.
+        _state.value = _state.value.copy(
+            phase = WorkoutPhase.REST_INTERVAL,
+            restSecondsRemaining = baseRest,
+            isRestExtended = false,
+            activeCoachAlert = "Rest ${baseRest}s and recover."
+        )
+
         sessionScope?.launch {
             // ADK zero-key agent calculates vitals-guided adaptive rest
             val restResult = coachAgent.calculateAdaptiveRest(
@@ -175,13 +184,15 @@ class WorkoutManager(
                 currentHeartRateBpm = capturedHr
             )
 
+            // skipRest() or finishWorkout() may have moved on while the agent was running.
+            if (_state.value.phase != WorkoutPhase.REST_INTERVAL) return@launch
+
             val finalRestSeconds = restResult.adjustedRestSeconds
             if (restResult.isExtended) {
                 extendedRestTotalSeconds += (restResult.adjustedRestSeconds - baseRest)
             }
 
             _state.value = _state.value.copy(
-                phase = WorkoutPhase.REST_INTERVAL,
                 restSecondsRemaining = finalRestSeconds,
                 isRestExtended = restResult.isExtended,
                 activeCoachAlert = restResult.reason
@@ -190,13 +201,15 @@ class WorkoutManager(
             restTimerJob?.cancel()
             restTimerJob = launch {
                 var remaining = finalRestSeconds
-                while (remaining > 0 && isActive) {
+                while (remaining > 0 && isActive &&
+                    _state.value.phase == WorkoutPhase.REST_INTERVAL
+                ) {
                     delay(1000L)
                     remaining--
                     _state.value = _state.value.copy(restSecondsRemaining = remaining)
                 }
                 // Transition to next set
-                if (isActive) {
+                if (isActive && _state.value.phase == WorkoutPhase.REST_INTERVAL) {
                     nextSet()
                 }
             }

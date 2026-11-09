@@ -1,5 +1,11 @@
 # FitLens Proguard / R8 Optimization & Obfuscation Rules
 
+# 0. Application & Entry-Point Classes
+#    R8 must never rename or remove these — Android instantiates them by the
+#    exact class name declared in AndroidManifest.xml via reflection.
+-keep public class com.fitlens.app.FitLensApp { *; }
+-keep public class com.fitlens.app.MainActivity { *; }
+
 # 1. Google ADK Kotlin & Tool Annotations
 -keep class com.google.adk.** { *; }
 -keep interface com.google.adk.** { *; }
