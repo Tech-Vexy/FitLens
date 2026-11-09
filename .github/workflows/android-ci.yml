@@ -120,12 +120,26 @@ jobs:
           # Inspect the arm64 APK (canonical release artifact)
           unzip -o app/build/outputs/apk/release/app-arm64-v8a-release.apk "classes*.dex" -d /tmp/apk_inspect
 
+          shopt -s nullglob
+          dex_files=(/tmp/apk_inspect/classes*.dex)
+          if [ "${#dex_files[@]}" -eq 0 ]; then
+            echo "ERROR: No classes*.dex files were extracted from release APK."
+            exit 1
+          fi
+
           MISSING=0
           for CLASS in \
             "com.fitlens.app.FitLensApp" \
             "com.fitlens.app.MainActivity"; do
             DESCRIPTOR="L$(echo "$CLASS" | tr '.' '/');"
-            if "$DEXDUMP" -l plain /tmp/apk_inspect/classes*.dex 2>/dev/null | grep -qF "$DESCRIPTOR"; then
+            FOUND=0
+            for dex_file in "${dex_files[@]}"; do
+              if "$DEXDUMP" -l plain "$dex_file" 2>/dev/null | grep -qF "$DESCRIPTOR"; then
+                FOUND=1
+                break
+              fi
+            done
+            if [ "$FOUND" -eq 1 ]; then
               echo "PASS: $CLASS found in DEX."
             else
               echo "FAIL: $CLASS is MISSING from DEX — R8 stripped it!"
