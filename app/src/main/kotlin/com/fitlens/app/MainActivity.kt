@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
                     if (s.timestamp > latestPressureTs) {
                         latestPressureTs = s.timestamp
                         pressureBuf.add(s.value)
-                        if (pressureBuf.size > 200) pressureBuf.removeFirst()
+                        if (pressureBuf.size > 200) pressureBuf.removeAt(0)
                     }
                 }
             }
@@ -186,14 +186,14 @@ class MainActivity : ComponentActivity() {
                     if (s.timestamp > latestChestTs) {
                         latestChestTs = s.timestamp
                         chestBuf.add(s.value)
-                        if (chestBuf.size > 200) chestBuf.removeFirst()
+                        if (chestBuf.size > 200) chestBuf.removeAt(0)
                     }
                 }
                 m.breathing.lowerTraceList.forEach { s ->
                     if (s.timestamp > latestAbdomenTs) {
                         latestAbdomenTs = s.timestamp
                         abdomenBuf.add(s.value)
-                        if (abdomenBuf.size > 200) abdomenBuf.removeFirst()
+                        if (abdomenBuf.size > 200) abdomenBuf.removeAt(0)
                     }
                 }
             }
