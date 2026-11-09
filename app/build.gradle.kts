@@ -1,6 +1,6 @@
 plugins {
     id("com.android.application")
-    id("com.google.gms.google-services")
+    id("com.google.gms.google-services") apply false
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
