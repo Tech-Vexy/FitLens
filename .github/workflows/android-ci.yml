@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify-architecture-and-tests:
     name: Architecture, Day 1 Gate & Unit Tests
@@ -52,8 +59,21 @@ jobs:
             echo "PRESAGE_API_KEY is unavailable; using the committed placeholder for this build."
           fi
 
-      - name: Run Unit Tests (Headless Day 1 Hard Gate Suite)
-        run: ./gradlew test --stacktrace
+      - name: Configure Firebase
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          else
+            echo "GOOGLE_SERVICES_JSON is unavailable; Firebase integration checks will be skipped."
+          fi
+
+      - name: Run FitLens architecture verification
+        run: ./scripts/verify_fitlens.sh
+
+      - name: Run Android lint
+        run: ./gradlew lintDebug --stacktrace
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace

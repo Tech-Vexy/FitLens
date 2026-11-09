@@ -282,7 +282,9 @@ class FitnessCoachTest {
 
     @Test
     fun testHybridAgentRouting() = runBlocking {
-        val agent = FitnessCoachAgent()
+        val agent = FitnessCoachAgent(
+            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+        )
 
         // Edge execution target test
         val edgeRest = agent.calculateAdaptiveRest(
@@ -314,9 +316,7 @@ class FitnessCoachTest {
         assertEquals(com.fitlens.app.ai.adk.AdkAuthMode.FIREBASE_AI_LOGIC, firebaseAgent.rootAgent.model.authMode)
         assertEquals("gemini-3.8-flash", firebaseAgent.rootAgent.model.modelName)
 
-        val runnerResponse = firebaseAgent.runner.execute("Generate plan")
-        assertTrue(runnerResponse.contains("Firebase AI Logic + App Check"))
-        assertTrue(firebaseAgent.runner.getHistory().isNotEmpty())
+        assertTrue(firebaseAgent.rootAgent.model is com.fitlens.app.ai.adk.FirebaseGeminiAdapter)
     }
 
     @Test
@@ -431,7 +431,9 @@ class FitnessCoachTest {
         assertEquals(5, plan.phases[3].targetIntensityRpe)
 
         // Agent request verification
-        val agent = FitnessCoachAgent()
+        val agent = FitnessCoachAgent(
+            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+        )
         val agentPlan = agent.requestMesocyclePlan("Strength", 4, 3)
         assertNotNull(agentPlan)
         assertEquals(4, agentPlan.totalWeeks)

@@ -20,8 +20,17 @@ class FitLensApp : Application() {
 
     private fun initFirebaseAppCheck() {
         try {
-            FirebaseApp.initializeApp(this)
+            val firebaseApp = FirebaseApp.initializeApp(this)
+            if (firebaseApp == null) {
+                Log.e(
+                    TAG,
+                    "Firebase is not configured. Add app/google-services.json before using Firebase AI Logic."
+                )
+                return
+            }
+
             val firebaseAppCheck = FirebaseAppCheck.getInstance()
+            firebaseAppCheck.setTokenAutoRefreshEnabled(true)
 
             if (BuildConfig.DEBUG) {
                 // In debug mode, use the Debug Provider for emulator/device testing
@@ -36,8 +45,8 @@ class FitLensApp : Application() {
                 )
                 Log.i(TAG, "Firebase App Check initialized with PlayIntegrityAppCheckProviderFactory")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Firebase initialization deferred or skipped: ${e.message}")
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Firebase initialization failed; cloud AI features are unavailable", e)
         }
     }
 }

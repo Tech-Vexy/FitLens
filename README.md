@@ -81,6 +81,16 @@ FitLens features a **zero-key AI architecture** backed by Google's Agent Develop
   ```
 - Accessible in Kotlin code via `com.fitlens.app.BuildConfig.PRESAGE_API_KEY`.
 
+### Firebase Project Configuration
+
+Firebase AI Logic and App Check use the official Firebase Android SDK. Download
+the app configuration from **Firebase Console → Project settings → Your apps**
+and save it as `app/google-services.json`; this file is git-ignored. Configure
+the same file contents as the `GOOGLE_SERVICES_JSON` repository secret for CI/CD.
+Debug builds use the App Check debug provider, while release builds use Play
+Integrity. Register the release SHA-256 fingerprint in Firebase App Check before
+publishing a release.
+
 ---
 
 ## 🔬 SmartSpectra Android SDK Integration Reference
@@ -171,9 +181,26 @@ FitLens/
 │   └── COMPETITION_SUBMISSION_GUIDE.md            # Hackathon pitch & judge demo script
 ├── scripts/
 │   └── verify_fitlens.sh                          # Automated 5-stage architectural verification script
-├── .github/workflows/android-ci.yml               # Automated Day 1 Hard Gate & Secret-Leak CI
+├── .github/workflows/android-ci.yml               # PR/main verification, tests, lint & APK build
+├── .github/workflows/android-cd.yml               # Version-tagged APK/AAB GitHub Releases
 ├── build.gradle.kts                               # Root plugins (Secrets, KSP, Google Services)
 ├── local.defaults.properties                      # Committed placeholder secrets
 ├── secrets.properties                             # Git-ignored developer secrets
 └── .gitignore
 ```
+
+## 🚀 CI/CD
+
+Pull requests and pushes to `main` or `master` run the architectural checks, unit
+tests, Android lint, and release APK build. To publish a release, create and push
+a semantic version tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The CD workflow builds the release APK and AAB, stores them as workflow artifacts,
+and attaches them to a generated GitHub Release. Configure the `PRESAGE_API_KEY`
+and `GOOGLE_SERVICES_JSON` repository secrets for production builds; CI uses
+local fallbacks only when those secrets are not present.

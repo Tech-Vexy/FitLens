@@ -5,6 +5,10 @@ plugins {
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
 }
 
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.fitlens.app"
     compileSdk = 36
@@ -86,8 +90,9 @@ dependencies {
     // MediaPipe Pose Estimation
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
-    // Firebase BOM & App Check (Zero AI Key Protection)
-    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    // Firebase AI Logic & App Check (Zero AI Key Protection)
+    implementation(platform("com.google.firebase:firebase-bom:35.1.0"))
+    implementation("com.google.firebase:firebase-ai")
     implementation("com.google.firebase:firebase-appcheck-playintegrity")
     implementation("com.google.firebase:firebase-appcheck-debug")
 

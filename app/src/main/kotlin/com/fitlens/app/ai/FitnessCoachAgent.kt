@@ -80,8 +80,8 @@ class FitnessCoachAgent(
         avgHrBpm: Double,
         formDeviations: Int
     ): SessionAnalysisResult {
-        Log.i(TAG, "Evaluating session via ${rootAgent.name} with vitals: $avgHrBpm bpm, deviations: $formDeviations")
-        runner.execute("Evaluate session: duration=$durationSeconds, avgHr=$avgHrBpm, deviations=$formDeviations")
+        Log.i(TAG, "Evaluating session locally with vitals: $avgHrBpm bpm, deviations: $formDeviations")
+        // Health telemetry remains local-only; do not send it to Firebase AI Logic.
         return tools.analyzeSession(durationSeconds, avgHrBpm, formDeviations)
     }
 
