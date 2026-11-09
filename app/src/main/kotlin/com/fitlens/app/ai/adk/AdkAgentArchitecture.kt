@@ -1,6 +1,7 @@
 package com.fitlens.app.ai.adk
 
 import android.util.Log
+import com.fitlens.app.ai.firebase.FirebaseAiService
 
 /**
  * Authentication and backend model routing modes for ADK Kotlin.
@@ -42,6 +43,9 @@ data class FirebaseGeminiAdapter(
     val appCheckEnforced: Boolean = true
 ) : AdkModelAdapter {
     override val authMode: AdkAuthMode = AdkAuthMode.FIREBASE_AI_LOGIC
+
+    suspend fun generate(prompt: String): String =
+        FirebaseAiService(modelName).generateText(prompt)
 }
 
 /**
@@ -107,7 +111,7 @@ class AdkInMemoryRunner(
 
         val response = when (agent.model.authMode) {
             AdkAuthMode.FIREBASE_AI_LOGIC -> {
-                "[Firebase AI Logic + App Check] Coached via ${agent.model.modelName} (Zero-Key Identity Attested)"
+                (agent.model as FirebaseGeminiAdapter).generate(prompt)
             }
             AdkAuthMode.GOOGLE_ADC -> {
                 "[Google ADC / Vertex AI] Coached via ${agent.model.modelName} (Application Default Credentials)"
