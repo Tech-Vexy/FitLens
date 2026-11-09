@@ -200,7 +200,15 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The CD workflow builds the release APK and AAB, stores them as workflow artifacts,
-and attaches them to a generated GitHub Release. Configure the `PRESAGE_API_KEY`
-and `GOOGLE_SERVICES_JSON` repository secrets for production builds; CI uses
-local fallbacks only when those secrets are not present.
+The CD workflow builds two signed release APKs only: `armeabi-v7a` (ARM32) and
+`arm64-v8a` (ARM64). No universal, x86, or x86_64 APK is produced. Configure
+these repository secrets for production builds:
+
+| Secret | Purpose |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Base64-encoded release keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Signing key alias |
+| `ANDROID_KEY_PASSWORD` | Signing key password |
+| `PRESAGE_API_KEY` | Presage SDK credential |
+| `GOOGLE_SERVICES_JSON` | Firebase app configuration |
