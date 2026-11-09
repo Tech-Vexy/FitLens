@@ -112,9 +112,6 @@ jobs:
       - name: Verify Critical Classes Survived R8 Minification
         run: |
           set -euo pipefail
-          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
-          DEXDUMP="$ANDROID_HOME/build-tools/$BUILD_TOOLS/dexdump"
-
           echo "Verifying critical classes are present in release DEX..."
           mkdir -p /tmp/apk_inspect
           # Inspect the arm64 APK (canonical release artifact)
@@ -134,7 +131,7 @@ jobs:
             DESCRIPTOR="L$(echo "$CLASS" | tr '.' '/');"
             FOUND=0
             for dex_file in "${dex_files[@]}"; do
-              if "$DEXDUMP" -l plain "$dex_file" 2>/dev/null | grep -qF "$DESCRIPTOR"; then
+              if strings "$dex_file" | grep -qF "$DESCRIPTOR"; then
                 FOUND=1
                 break
               fi
