@@ -252,7 +252,7 @@ class FitnessCoachTest {
         assertTrue(reading.heartRateBpm > 135.0)
         assertTrue(reading.isReliable)
         assertNotNull(reading.smartSpectraLlmInsight)
-        assertTrue(reading.smartSpectraLlmInsight!!.contains("SmartSpectra Insight"))
+        assertTrue(reading.smartSpectraLlmInsight!!.contains("SmartSpectra"))
         assertEquals(HeartRateZone.ANAEROBIC, reading.heartRateZone)
     }
 

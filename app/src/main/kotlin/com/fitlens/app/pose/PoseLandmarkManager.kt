@@ -122,7 +122,7 @@ class PoseLandmarkManager(
         var primaryAngle = 180.0
 
         when (activeExercise.lowercase()) {
-            "squat", "bodyweight squats", "barbell squat" -> {
+            "squat", "squats", "bodyweight squats", "barbell squat" -> {
                 primaryAngle = analyzeSquat(landmarks, deviations)
             }
             "push-up", "push-ups" -> {
