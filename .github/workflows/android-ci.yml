@@ -131,7 +131,7 @@ jobs:
             DESCRIPTOR="L$(echo "$CLASS" | tr '.' '/');"
             FOUND=0
             for dex_file in "${dex_files[@]}"; do
-              if strings "$dex_file" | grep -qF "$DESCRIPTOR"; then
+              if grep -qaF "$DESCRIPTOR" "$dex_file"; then
                 FOUND=1
                 break
               fi
