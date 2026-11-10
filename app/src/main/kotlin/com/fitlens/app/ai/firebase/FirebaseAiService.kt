@@ -2,7 +2,7 @@ package com.fitlens.app.ai.firebase
 
 import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.FirebaseAI
-import com.google.firebase.ai.GenerativeBackend
+import com.google.firebase.ai.type.GenerativeBackend
 
 /**
  * Thin Firebase AI Logic boundary used by the cloud coaching path.
