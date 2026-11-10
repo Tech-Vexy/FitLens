@@ -3,6 +3,11 @@ package com.fitlens.app.pose
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.camera.core.ImageProxy
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions.ImageProcessingOptionsMode
+import com.google.mediapipe.tasks.vision.pose_landmarker.PoseLandmarker
+import com.google.mediapipe.tasks.vision.pose_landmarker.PoseLandmarkerResult
 import kotlin.math.abs
 import kotlin.math.atan2
 
@@ -86,6 +91,110 @@ class PoseLandmarkManager(
     private var currentPhase: RepPhase = RepPhase.START
     private var minAngleObserved: Double = 180.0
     private var totalDeviationsCount: Int = 0
+
+    // MediaPipe PoseLandmarker instance (lazy-initialized on first frame)
+    @Volatile private var mpLandmarker: PoseLandmarker? = null
+    private val mpImageProcessingOptions = ImageProcessingOptions.builder()
+        .setMode(ImageProcessingOptionsMode.IMAGE)
+        .build()
+
+    /**
+     * Initializes the MediaPipe PoseLandmarker on the first call to [analyzeFrame].
+     * Uses the bundled pose landmarker task binary resource.
+     */
+    private fun ensureLandmarker(): PoseLandmarker? {
+        return mpLandmarker ?: runCatching {
+            context?.let { ctx ->
+                val options = PoseLandmarker.PoseLandmarkerOptions.builder()
+                    .setBaseOptions(
+                        PoseLandmarker.BaseOptions.builder()
+                            .setModelAssetPath("pose_landmarker.task")
+                            .build()
+                    )
+                    .setMinPoseDetectionConfidence(0.5f)
+                    .setMinPoseTrackingConfidence(0.5f)
+                    .setMinPosePresenceConfidence(0.5f)
+                    .setOutputSegmentationMasks(false)
+                    .setOutputLandmarksWorldCoordinates(true)
+                    .build()
+                PoseLandmarker.createFromOptions(ctx, options).also {
+                    mpLandmarker = it
+                    Log.d(TAG, "MediaPipe PoseLandmarker initialized successfully")
+                }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Analyzes a CameraX ImageProxy frame via MediaPipe PoseLandmarker.
+     * Converts the YUV_420_888 ImageProxy to a Bitmap, runs pose detection,
+     * and returns a [PoseAnalysisFrame] with the detected landmarks.
+     *
+     * The caller (DualStreamAnalyzer) is responsible for closing the ImageProxy
+     * after this method returns.
+     */
+    fun analyzeFrame(imageProxy: ImageProxy): PoseAnalysisFrame {
+        val landmarker = ensureLandmarker()
+            ?: return analyzeLandmarks(emptyMap())
+
+        return runCatching {
+            // Convert ImageProxy to Bitmap for MediaPipe
+            val bitmap = imageProxy.toBitmap()
+            val mpResult = landmarker.detect(bitmap)
+            bitmap.recycle()
+
+            // Convert MediaPipe landmarks to our LandmarkPoint format
+            val landmarks = landmarksFromMediaPipe(mpResult, imageProxy.width, imageProxy.height)
+            analyzeLandmarks(landmarks)
+        }.getOrElse { e ->
+            Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
+            analyzeLandmarks(emptyMap())
+        }
+    }
+
+    /**
+     * Converts a CameraX ImageProxy (YUV_420_888) to an ARGB_8888 Bitmap for MediaPipe.
+     * Extracts the Y (luminance) plane and creates a grayscale bitmap.
+     */
+    private fun ImageProxy.toBitmap(): Bitmap {
+        val buffer = planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        // For YUV_420_888, we create a grayscale approximation from Y plane
+        val ySize = bytes.size
+        val w = width
+        val h = height
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(w * h)
+        for (i in 0 until ySize.coerceAtMost(w * h)) {
+            val y = bytes[i].toInt() and 0xFF
+            pixels[i] = -0x1000000 or (y shl 16) or (y shl 8) or y
+        }
+        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        return bitmap
+    }
+
+    /**
+     * Converts MediaPipe PoseLandmarkerResult to our LandmarkPoint map.
+     */
+    private fun landmarksFromMediaPipe(
+        result: PoseLandmarkerResult,
+        imageWidth: Int,
+        imageHeight: Int
+    ): Map<Int, LandmarkPoint> {
+        val map = mutableMapOf<Int, LandmarkPoint>()
+        result.landmarks().forEachIndexed { categoryIndex, pose ->
+            pose.forEachIndexed { landmarkIndex, landmark ->
+                // Normalize coordinates to 0..1 range
+                val x = landmark.x().coerceIn(0f, 1f)
+                val y = landmark.y().coerceIn(0f, 1f)
+                val z = landmark.z()
+                val visibility = landmark.visibility()
+                map[landmarkIndex] = LandmarkPoint(x, y, z, visibility)
+            }
+        }
+        return map
+    }
 
     fun setExercise(exercise: String) {
         activeExercise = exercise

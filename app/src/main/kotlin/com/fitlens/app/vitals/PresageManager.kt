@@ -44,22 +44,30 @@ class PresageManager {
      * Application.onCreate() or the Activity's onCreate().
      *
      * The SDK stores singleton state; calling this again simply refreshes config values.
+     *
+     * Note: We use the custom input (headless) mode — the SDK's built-in camera is NOT
+     * used. CameraX provides the preview and ImageAnalysis, and frames are forwarded
+     * to SmartSpectra via useCustomInput(). This avoids camera device lock contention
+     * between SmartSpectra and MediaPipe.
      */
     fun initializeSdk(context: Context) {
-        val sdk = SmartSpectraSdk.shared
+        val config = SmartSpectraConfig().apply {
+            // Inject credentials from the build-time secret
+            apiKey = getApiKey()
 
-        // Inject credentials from the build-time secret
-        sdk.config.apiKey = getApiKey()
+            // Disable raw bitmap output — we render the CameraX PreviewView directly
+            imageOutputEnabled = false
 
-        // Disable raw bitmap output — we render the CameraX PreviewView directly
-        sdk.config.imageOutputEnabled = false
+            // Request the full cardio + breathing + expression metric bundle
+            requestedMetrics =
+                SmartSpectraConfig.cardioMetrics +
+                SmartSpectraConfig.breathingMetrics +
+                listOf(MetricType.EXPRESSIONS)
+        }
 
-        // Request the full cardio + breathing + expression metric bundle
-        sdk.config.requestedMetrics =
-            SmartSpectraConfig.cardioMetrics +
-            SmartSpectraConfig.breathingMetrics +
-            listOf(MetricType.EXPRESSIONS)
+        // Initialize the shared SDK singleton with our config
+        SmartSpectraSdk.initialize(context, config)
 
-        Log.i(TAG, "SmartSpectraSdk configured (cardio + breathing + expressions).")
+        Log.i(TAG, "SmartSpectraSdk initialized (cardio + breathing + expressions, custom input mode).")
     }
 }

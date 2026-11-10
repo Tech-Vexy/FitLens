@@ -3,10 +3,10 @@ package com.fitlens.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -25,11 +25,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.fitlens.app.camera.CameraPreviewView
+import com.fitlens.app.camera.DualStreamAnalyzer
+import com.fitlens.app.pose.PoseLandmarkManager
+import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.vitals.PresageManager
-import com.presagetech.smartspectra.CameraSelection
 import com.presagetech.smartspectra.ProcessingStatus
 import com.presagetech.smartspectra.SmartSpectraConfig
 import com.presagetech.smartspectra.SmartSpectraSdk
@@ -51,22 +53,39 @@ private val BG_TOP  = Color(0xFF0B1020)
 private val BG_BOT  = Color(0xFF05070C)
 
 /**
- * Single-screen Activity — CameraX preview fills the top half; metric cards
+ * Single-screen Activity — CameraX preview fills the screen; metric cards
  * live at the bottom. No navigation stack, no multi-screen enum.
  *
+ * Architecture: Uses CameraX for preview + ImageAnalysis, with DualStreamAnalyzer
+ * dispatching each frame to both SmartSpectra (vitals) and MediaPipe (pose).
+ * SmartSpectra receives frames via useCustomInput() (headless mode) — the SDK's
+ * built-in camera is NOT used, avoiding camera device lock contention.
+ *
  * SDK lifecycle:
- *   onCreate  → configure SmartSpectraSdk (api key, metrics, camera)
+ *   onCreate  → configure SmartSpectraSdk (api key, metrics) via PresageManager
  *   onPause   → stop the SDK pipeline (camera releases)
  *   Start btn → request camera permission if needed, then sdk.start()
- *   Stop btn  → sdk.stop()
+ *   Stop btn  → sdk.stop() + resetCustomInput() for clean next session
  *
  * All metric values come from sdk.metrics LiveData, observed as Compose State
  * via observeAsState().
  */
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val sdk by lazy { SmartSpectraSdk.shared }
     private val presageManager = PresageManager()
+    private val presageAnalyzer by lazy { PresageFrameAnalyzer() }
+    private val poseManager by lazy { PoseLandmarkManager(this) }
+    private val dualStreamAnalyzer by lazy {
+        DualStreamAnalyzer(
+            presageAnalyzer = presageAnalyzer,
+            poseManager = poseManager
+        )
+    }
 
     // Camera permission launcher
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -78,14 +97,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ── Configure SDK once ────────────────────────────────────────────
-        sdk.config.apiKey = presageManager.getApiKey()
-        sdk.config.imageOutputEnabled = false
-        sdk.useCamera(CameraSelection.Front)
-        sdk.config.requestedMetrics =
-            SmartSpectraConfig.breathingMetrics +
-            SmartSpectraConfig.cardioMetrics +
-            listOf(MetricType.EXPRESSIONS)
+        // ── Configure SDK once via PresageManager ─────────────────────────
+        presageManager.initializeSdk(this)
 
         setContent { FitLensScreen() }
     }
@@ -96,7 +109,11 @@ class MainActivity : ComponentActivity() {
             when (sdk.processingStatus.value) {
                 ProcessingStatus.RUNNING,
                 ProcessingStatus.STARTING,
-                ProcessingStatus.STOPPING -> runCatching { sdk.stop() }
+                ProcessingStatus.STOPPING -> {
+                    runCatching { sdk.stop() }
+                    // Reset the cached CustomInput handle so the next session gets a fresh one
+                    presageAnalyzer.resetCustomInput()
+                }
                 else -> Unit
             }
         }
@@ -108,7 +125,10 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleMeasurement() {
         when (sdk.processingStatus.value) {
-            ProcessingStatus.RUNNING -> lifecycleScope.launch { runCatching { sdk.stop() } }
+            ProcessingStatus.RUNNING -> lifecycleScope.launch {
+                runCatching { sdk.stop() }
+                presageAnalyzer.resetCustomInput()
+            }
             ProcessingStatus.STARTING, ProcessingStatus.STOPPING -> Unit
             else -> {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -123,7 +143,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startMeasurement() {
-        lifecycleScope.launch { runCatching { sdk.start() } }
+        lifecycleScope.launch {
+            runCatching {
+                // Reset the custom input handle before starting a new session
+                presageAnalyzer.resetCustomInput()
+                sdk.start()
+                Log.d(TAG, "SmartSpectra SDK started (custom input mode)")
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to start SmartSpectra SDK", e)
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -206,8 +235,12 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .background(BG_BOT)
         ) {
-            // Camera preview fills the screen
-            CameraPreview(modifier = Modifier.fillMaxSize())
+            // Camera preview fills the screen using CameraX + DualStreamAnalyzer
+            CameraPreviewView(
+                analyzer = dualStreamAnalyzer,
+                useFrontCamera = true,
+                modifier = Modifier.fillMaxSize()
+            )
 
             // Dark gradient scrim so cards are readable
             Box(
@@ -349,20 +382,6 @@ class MainActivity : ComponentActivity() {
     // ─────────────────────────────────────────────────────────────────────
     // Reusable composables
     // ─────────────────────────────────────────────────────────────────────
-
-    @Composable
-    private fun CameraPreview(modifier: Modifier = Modifier) {
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                    sdk.config.previewSurfaceProvider = surfaceProvider
-                }
-            },
-            modifier = modifier
-        )
-    }
 
     @Composable
     private fun StatusBar(

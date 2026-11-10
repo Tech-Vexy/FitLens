@@ -14,6 +14,8 @@ if (file("google-services.json").exists()) {
 android {
     namespace = "com.fitlens.app"
     compileSdk = 36
+    // SmartSpectra SDK 3.5.0 requires compileSdk 36.1+
+    // Note: Android Gradle Plugin resolves 36 to the latest 36.x platform
 
     signingConfigs {
         create("release") {
@@ -153,7 +155,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
-    implementation("com.presagetech:smartspectra:3.4.0")
+    implementation("com.presagetech:smartspectra:3.5.0")
 
     // MediaPipe Pose Estimation
     implementation("com.google.mediapipe:tasks-vision:0.10.14")

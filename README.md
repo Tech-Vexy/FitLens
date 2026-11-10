@@ -38,11 +38,16 @@ FitLens features a **zero-key AI architecture** backed by Google's Agent Develop
 ### 3. Sensing & Intelligence Layer
 - **CameraX & DualStreamAnalyzer**:
   - High-performance non-blocking dual dispatcher feeding CameraX `ImageProxy` frames simultaneously to MediaPipe and SmartSpectra.
+  - `DualStreamAnalyzer` forwards each frame to both `PresageFrameAnalyzer` (vitals) and `PoseLandmarkManager` (pose) — no camera device lock contention.
   - Lifecycle-aware `CameraPreviewView` with live Jetpack Compose `SkeletonOverlay` displaying 33 skeletal joints and connecting bones.
 - **Presage Android SDK (`PresageFrameAnalyzer`)**:
-  - Ingests CameraX `ImageProxy` frames via `useCustomInput()`.
+  - Ingests CameraX `ImageProxy` frames via `useCustomInput()` (headless/custom-input mode).
+  - `CustomInput` handle is cached once per SDK session and reused across all frames for optimal performance.
   - Computes pulse, HRV, breathing rate, and categorizes into 5 physiological zones (Resting, Warmup, Aerobic, Anaerobic, Max).
+  - SDK errors and validation status are observed and logged via `WorkoutViewModel`.
 - **MediaPipe Pose Landmarker (`PoseLandmarkManager`)**:
+  - Lazy-initialized `PoseLandmarker` from `pose_landmarker.task` asset on first frame.
+  - Converts `ImageProxy` (YUV_420_888) to `Bitmap` for MediaPipe, then maps results to normalized `LandmarkPoint` format.
   - Real-time 33 3D skeletal landmarks across a multi-exercise library:
     - **Squats**: Knee flexion angle, knee valgus collapse detection, and torso forward lean.
     - **Push-ups**: Elbow flexion angle and spinal alignment.
@@ -99,13 +104,21 @@ Based on official Presage SmartSpectra documentation:
 
 | Document | Topic | FitLens Integration |
 |---|---|---|
-| [API Reference](https://smartspectra.presagetech.com/docs/android/api-reference/) | `SmartSpectraSdk.shared` & Lifecycle | Initialized via `SmartSpectraSdk.initialize(context, config)` |
-| [Headless Mode](https://smartspectra.presagetech.com/docs/android/headless-mode/) | `useCustomInput()` & `sendFrame()` | Ingests CameraX `ImageProxy` frames directly via `CustomInput.sendFrame(imageProxy)` without camera lock contention |
-| [Metrics](https://smartspectra.presagetech.com/docs/android/metrics/) | `cardioMetrics` & `breathingMetrics` | Configures pulse rate (BPM), HRV (ms), arterial pressure trace waveform, and respiratory rate |
+| [API Reference](https://smartspectra.presagetech.com/docs/android/api-reference/) | `SmartSpectraSdk.initialize()` & Lifecycle | Initialized via `SmartSpectraSdk.initialize(context, config)` in `MainActivity.onCreate()` |
+| [Headless Mode](https://smartspectra.presagetech.com/docs/android/headless-mode/) | `useCustomInput()` & `sendFrame()` | `CustomInput` handle cached once per session; `ImageProxy` frames submitted via `CustomInput.sendFrame()` without camera lock contention |
+| [Metrics](https://smartspectra.presagetech.com/docs/android/metrics/) | `cardioMetrics` & `breathingMetrics` | Configures pulse rate (BPM), HRV (ms), arterial pressure trace waveform, and respiratory rate; all arterial pressure samples collected for waveform display |
 | [LLM Insights](https://smartspectra.presagetech.com/docs/android/llm-insights/) | `sdk.insight` LiveData | Streams natural-language physiological summaries into ADK agent context for multi-agent reasoning |
 | [Option 2: OAuth](https://smartspectra.presagetech.com/docs/android/option-2-oauth/) | Production Auth Configuration | Configured via `app/src/main/res/xml/presage_oauth_config.xml` eliminating static keys in production |
 | [Headless Testing in CI](https://smartspectra.presagetech.com/docs/android/headless-testing-in-ci/) | `@OptIn(SmartSpectraTestingApi::class)` | Automated headless verification using pre-recorded video frames |
 | [Migration Guide](https://smartspectra.presagetech.com/docs/android/migration-guide/) | v3.4.0+ Architectural Standards | Implements current module naming and frame submission contracts |
+
+### Key Integration Improvements
+
+- **CustomInput handle caching**: The `CustomInput` handle from `useCustomInput()` is now cached once per SDK session and reused across all frames, rather than being obtained on every frame.
+- **DualStreamAnalyzer completeness**: `DualStreamAnalyzer` now correctly dispatches frames to both SmartSpectra (vitals) and MediaPipe (pose) — previously it only forwarded to SmartSpectra.
+- **SDK error & validation observation**: `WorkoutViewModel` now observes `sdk.error` and `sdk.validationStatus` LiveData for proper error handling and user guidance.
+- **Clean session lifecycle**: `resetCustomInput()` is called after `sdk.stop()` to ensure the next session gets a fresh `CustomInput` handle.
+- **MediaPipe frame analysis**: `PoseLandmarkManager.analyzeFrame()` converts `ImageProxy` to `Bitmap` and runs the MediaPipe `PoseLandmarker` for real-time pose detection.
 
 ---
 

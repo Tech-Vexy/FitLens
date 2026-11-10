@@ -76,7 +76,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val activeVitalsBuffer = mutableListOf<com.fitlens.app.data.model.VitalsLogEntity>()
     private val activeFaultsBuffer = mutableListOf<com.fitlens.app.data.model.BiomechanicalFaultEntity>()
 
-    // Observer kept for cleanup in onCleared (ViewModel has no LifecycleOwner)
+    // Observers kept for cleanup in onCleared (ViewModel has no LifecycleOwner)
     private val sdkMetricsObserver = Observer<com.presagetech.smartspectra.proto.MetricsProto.Metrics?> { metrics ->
         if (metrics == null) return@Observer
         var hr = 0.0
@@ -91,7 +91,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 confidence = it.confidence
             }
             metrics.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.let { hrv = it.rmssd }
-            metrics.cardio.arterialPressureTraceList.lastOrNull()?.let { trace.add(it.value) }
+            // Collect all arterial pressure samples for waveform display
+            metrics.cardio.arterialPressureTraceList.forEach { trace.add(it.value) }
         }
         if (metrics.hasBreathing()) {
             metrics.breathing.rateList.lastOrNull()?.let { br = it.value.toDouble() }
@@ -107,11 +108,26 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private val sdkErrorObserver = Observer<com.presagetech.smartspectra.SmartSpectraError?> { error ->
+        if (error != null) {
+            android.util.Log.e("WorkoutViewModel", "SmartSpectra SDK error: ${error.message}")
+        }
+    }
+
+    private val sdkValidationObserver = Observer<String?> { hint ->
+        if (!hint.isNullOrEmpty()) {
+            android.util.Log.d("WorkoutViewModel", "SmartSpectra validation: $hint")
+        }
+    }
+
     init {
-        // Wire SmartSpectraSdk.shared.metrics LiveData → vitalsAnalyzer → vitalsFlow
+        val sdk = SmartSpectraSdk.shared
+        // Wire SmartSpectraSdk.shared LiveData streams → vitalsAnalyzer → vitalsFlow
         // observeForever is appropriate here because ViewModel has no LifecycleOwner;
-        // the observer is removed manually in onCleared().
-        SmartSpectraSdk.shared.metrics.observeForever(sdkMetricsObserver)
+        // the observers are removed manually in onCleared().
+        sdk.metrics.observeForever(sdkMetricsObserver)
+        sdk.error.observeForever(sdkErrorObserver)
+        sdk.validationStatus.observeForever(sdkValidationObserver)
 
         // Push UserProfile updates from DataStore into PresageFrameAnalyzer so that
         // heart rate zone classification always uses the personalized Karvonen model.
@@ -292,7 +308,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
-        SmartSpectraSdk.shared.metrics.removeObserver(sdkMetricsObserver)
+        val sdk = SmartSpectraSdk.shared
+        sdk.metrics.removeObserver(sdkMetricsObserver)
+        sdk.error.removeObserver(sdkErrorObserver)
+        sdk.validationStatus.removeObserver(sdkValidationObserver)
+        vitalsAnalyzer.resetCustomInput()
         audioCoach.shutdown()
         workoutManager.cleanup()
     }

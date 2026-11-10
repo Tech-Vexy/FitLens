@@ -45,7 +45,7 @@ enum class HeartRateZone(val label: String, val colorHex: Long) {
  * CameraX ImageAnalysis.Analyzer that submits each frame to SmartSpectra via the
  * official Headless / custom-input API:
  *
- *   val input = SmartSpectraSdk.shared.useCustomInput()
+ *   val input = SmartSpectraSdk.shared.useCustomInput()  // called once per session
  *   sdk.start()          // called once from the coroutine that owns the session
  *   input.sendFrame(imageProxy)   // called here for every CameraX frame
  *
@@ -54,6 +54,10 @@ enum class HeartRateZone(val label: String, val colorHex: Long) {
  *
  * This class also maintains a [vitalsFlow] StateFlow so that the ViewModel and UI can
  * collect the latest reading reactively even before SDK LiveData arrives.
+ *
+ * The [CustomInput] handle is cached after the first successful [useCustomInput] call
+ * and reused across all frames. Call [resetCustomInput()] when the SDK session ends
+ * (e.g. after sdk.stop()) so the next session gets a fresh handle.
  *
  * @param userProfile Used for personalised Karvonen heart-rate zone classification.
  *                    Call [updateUserProfile] whenever the DataStore emits an update.
@@ -71,6 +75,9 @@ class PresageFrameAnalyzer(
 
     private val _vitalsFlow = MutableStateFlow(VitalsReading())
     val vitalsFlow: StateFlow<VitalsReading> = _vitalsFlow.asStateFlow()
+
+    // Cached CustomInput handle — obtained once per SDK session and reused across frames
+    @Volatile private var customInput: com.presagetech.smartspectra.CustomInput? = null
 
     // -----------------------------------------------------------------------
     // Camera frame submission
@@ -90,7 +97,8 @@ class PresageFrameAnalyzer(
         val sdk = SmartSpectraSdk.shared
         // Only submit frames while the SDK pipeline is active
         try {
-            val input = sdk.useCustomInput()
+            // Lazily obtain the CustomInput handle on the first frame, then reuse it
+            val input = customInput ?: sdk.useCustomInput().also { customInput = it }
             when (val result = input.sendFrame(imageProxy)) {
                 is FrameSubmissionResult.Accepted -> Unit
                 is FrameSubmissionResult.Rejected -> {
@@ -103,6 +111,14 @@ class PresageFrameAnalyzer(
         } finally {
             imageProxy.close()
         }
+    }
+
+    /**
+     * Resets the cached [CustomInput] handle.
+     * Call this after [SmartSpectraSdk.stop()] so the next session gets a fresh handle.
+     */
+    fun resetCustomInput() {
+        customInput = null
     }
 
     // -----------------------------------------------------------------------
