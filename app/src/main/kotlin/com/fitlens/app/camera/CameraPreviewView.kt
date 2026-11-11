@@ -74,7 +74,6 @@ fun CameraPreviewView(
 
                         val imageAnalysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                             .build()
                             .also {
                                 it.setAnalyzer(cameraExecutor, analyzer)
