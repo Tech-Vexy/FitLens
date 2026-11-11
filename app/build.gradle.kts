@@ -145,8 +145,8 @@ dependencies {
     // Kotlin Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // CameraX (1.5.0 stable — SmartSpectra SDK 3.4.0 works with CameraX 1.5.x)
-    val cameraxVersion = "1.5.0"
+    // CameraX (1.6.0 required by SmartSpectra SDK 3.4.0 transitive dependency)
+    val cameraxVersion = "1.6.0"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
