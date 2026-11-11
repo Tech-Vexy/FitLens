@@ -14,13 +14,6 @@ enum class AdkAuthMode {
     FIREBASE_AI_LOGIC,
 
     /**
-     * Google Application Default Credentials (ADC).
-     * Used for developer workstations, backend proxies, JVM test runners, and CI.
-     * Authenticated via gcloud auth application-default login or GOOGLE_APPLICATION_CREDENTIALS.
-     */
-    GOOGLE_ADC,
-
-    /**
      * On-device sub-agent using Gemini Nano / LiteRT-LM (ML Kit).
      * Offline, zero network latency, privacy-sensitive local reasoning.
      */
@@ -48,16 +41,6 @@ data class FirebaseGeminiAdapter(
         FirebaseAiService(modelName).generateText(prompt)
 }
 
-/**
- * Google Application Default Credentials (ADC) Vertex AI adapter.
- */
-data class AdcVertexGeminiAdapter(
-    override val modelName: String = "gemini-3.8-flash",
-    val projectId: String? = null,
-    val location: String = "us-central1"
-) : AdkModelAdapter {
-    override val authMode: AdkAuthMode = AdkAuthMode.GOOGLE_ADC
-}
 
 /**
  * On-device local Gemini Nano adapter.
@@ -112,9 +95,6 @@ class AdkInMemoryRunner(
         val response = when (agent.model.authMode) {
             AdkAuthMode.FIREBASE_AI_LOGIC -> {
                 (agent.model as FirebaseGeminiAdapter).generate(prompt)
-            }
-            AdkAuthMode.GOOGLE_ADC -> {
-                "[Google ADC / Vertex AI] Coached via ${agent.model.modelName} (Application Default Credentials)"
             }
             AdkAuthMode.ON_DEVICE_EDGE -> {
                 "[On-Device Gemini Nano] Local edge inference (0ms latency, offline)"

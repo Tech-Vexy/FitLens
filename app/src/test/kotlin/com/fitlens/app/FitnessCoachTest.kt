@@ -321,19 +321,6 @@ class FitnessCoachTest {
     }
 
     @Test
-    fun testAdkAgentWithGoogleAdc() = runBlocking {
-        val adcAgent = FitnessCoachAgent(
-            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.GOOGLE_ADC
-        )
-
-        assertEquals("fitness_coach", adcAgent.rootAgent.name)
-        assertEquals(com.fitlens.app.ai.adk.AdkAuthMode.GOOGLE_ADC, adcAgent.rootAgent.model.authMode)
-
-        val runnerResponse = adcAgent.runner.execute("Evaluate session")
-        assertTrue(runnerResponse.contains("Google ADC / Vertex AI"))
-    }
-
-    @Test
     fun testAdkToolAnnotationsPresent() {
         val toolsClass = FitnessTools::class.java
         val methodNamesWithTool = toolsClass.methods

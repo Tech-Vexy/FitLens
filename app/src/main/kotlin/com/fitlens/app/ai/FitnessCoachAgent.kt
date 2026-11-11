@@ -1,7 +1,6 @@
 package com.fitlens.app.ai
 
 import android.util.Log
-import com.fitlens.app.ai.adk.AdcVertexGeminiAdapter
 import com.fitlens.app.ai.adk.AdkAuthMode
 import com.fitlens.app.ai.adk.AdkInMemoryRunner
 import com.fitlens.app.ai.adk.AdkInstruction
@@ -16,9 +15,7 @@ import com.fitlens.app.ai.adk.FirebaseGeminiAdapter
  * 1. Firebase AI Logic + App Check (Android production):
  *    - Uses the Agent Platform Gemini API through Firebase AI Logic.
  *    - Zero client API key in APK; gated by Play Integrity.
- * 2. Google Application Default Credentials (ADC) (Workstations, JVM, CI, Backend proxy):
- *    - Uses AdcVertexGeminiAdapter with Google ADC credentials (gcloud / service account).
- * 3. On-Device Edge Sub-Agent:
+ * 2. On-Device Edge Sub-Agent:
  *    - Uses EdgeGeminiNanoAdapter for zero-latency, local privacy-preserving execution.
  */
 class FitnessCoachAgent(
@@ -46,7 +43,6 @@ class FitnessCoachAgent(
         description = "Personalized fitness and biomechanics coach for FitLens.",
         model = when (initialAuthMode) {
             AdkAuthMode.FIREBASE_AI_LOGIC -> FirebaseGeminiAdapter(modelName = MODEL_GEMINI_FLASH)
-            AdkAuthMode.GOOGLE_ADC -> AdcVertexGeminiAdapter(modelName = MODEL_GEMINI_FLASH)
             AdkAuthMode.ON_DEVICE_EDGE -> EdgeGeminiNanoAdapter(modelName = MODEL_GEMINI_NANO)
         },
         instruction = AdkInstruction(SYSTEM_INSTRUCTION),
