@@ -89,24 +89,17 @@ jobs:
         run: ./scripts/verify_fitlens.sh
 
       - name: Compile Debug Kotlin (capture errors)
-        run: ./gradlew compileDebugKotlin --stacktrace --info 2>&1 | tee compile-debug.log || true
+        run: ./gradlew compileDebugKotlin --no-daemon --console=plain --stacktrace 2>&1 | tee compile-debug.log || true
 
       - name: Show Kotlin compilation errors
         if: always()
         run: |
-          echo "=== Looking for Kotlin compilation errors ==="
-          grep -A5 "e: " compile-debug.log || echo "No 'e: ' lines found"
-          echo "=== Looking for FAILED lines ==="
+          echo "=== Kotlin compilation errors (e: prefix) ==="
+          grep "^e: " compile-debug.log | head -50 || echo "No 'e: ' lines found"
+          echo "=== FAILED tasks ==="
           grep "FAILED" compile-debug.log || echo "No FAILED lines found"
-          echo "=== Last 100 lines of compile log ==="
-          tail -100 compile-debug.log
-
-      - name: Upload compile debug log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compile-debug-log
-          path: compile-debug.log
+          echo "=== Last 200 lines of compile log ==="
+          tail -200 compile-debug.log
 
       - name: Run Android lint
         run: ./gradlew lintDebug --stacktrace
