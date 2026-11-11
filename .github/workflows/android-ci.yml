@@ -91,6 +91,16 @@ jobs:
       - name: Compile Debug Kotlin (capture errors)
         run: ./gradlew compileDebugKotlin --stacktrace --info 2>&1 | tee compile-debug.log || true
 
+      - name: Show Kotlin compilation errors
+        if: always()
+        run: |
+          echo "=== Looking for Kotlin compilation errors ==="
+          grep -A5 "e: " compile-debug.log || echo "No 'e: ' lines found"
+          echo "=== Looking for FAILED lines ==="
+          grep "FAILED" compile-debug.log || echo "No FAILED lines found"
+          echo "=== Last 100 lines of compile log ==="
+          tail -100 compile-debug.log
+
       - name: Upload compile debug log
         if: always()
         uses: actions/upload-artifact@v4
