@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
@@ -104,13 +105,12 @@ class PoseLandmarkManager(
             context?.let { ctx ->
                 val options = PoseLandmarker.PoseLandmarkerOptions.builder()
                     .setBaseOptions(
-                        PoseLandmarker.BaseOptions.builder()
+                        BaseOptions.builder()
                             .setModelAssetPath("pose_landmarker.task")
                             .build()
                     )
                     .setRunningMode(RunningMode.IMAGE)
                     .setMinPoseDetectionConfidence(0.5f)
-                    .setMinPoseTrackingConfidence(0.5f)
                     .setMinPosePresenceConfidence(0.5f)
                     .setOutputSegmentationMasks(false)
                     .setOutputLandmarksWorldCoordinates(true)
@@ -189,7 +189,7 @@ class PoseLandmarkManager(
                 val x = landmark.x().coerceIn(0f, 1f)
                 val y = landmark.y().coerceIn(0f, 1f)
                 val z = landmark.z()
-                val visibility = landmark.visibility()
+                val visibility = landmark.visibility().orElse(1.0f)
                 map[landmarkIndex] = LandmarkPoint(x, y, z, visibility)
             }
         }

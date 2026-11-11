@@ -2,7 +2,7 @@ package com.fitlens.app
 
 import android.app.Application
 import android.util.Log
-import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
@@ -20,7 +20,7 @@ class FitLensApp : Application() {
 
     private fun initFirebaseAppCheck() {
         try {
-            Firebase.initialize(this)
+            FirebaseApp.initializeApp(this)
             val firebaseAppCheck = FirebaseAppCheck.getInstance()
             firebaseAppCheck.setTokenAutoRefreshEnabled(true)
 
