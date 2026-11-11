@@ -13,7 +13,7 @@ if (file("google-services.json").exists()) {
 
 android {
     namespace = "com.fitlens.app"
-    compileSdk = 35
+    compileSdk = 36
 
     signingConfigs {
         create("release") {
@@ -39,7 +39,7 @@ android {
     defaultConfig {
         applicationId = "com.fitlens.app"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
