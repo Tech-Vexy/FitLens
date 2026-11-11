@@ -1,6 +1,5 @@
 package com.fitlens.app.vitals
 
-import android.content.Context
 import android.util.Log
 import com.fitlens.app.BuildConfig
 import com.presagetech.smartspectra.SmartSpectraConfig
@@ -50,23 +49,18 @@ class PresageManager {
      * to SmartSpectra via useCustomInput(). This avoids camera device lock contention
      * between SmartSpectra and MediaPipe.
      */
-    fun initializeSdk(context: Context) {
-        val config = SmartSpectraConfig().apply {
-            // Inject credentials from the build-time secret
-            apiKey = getApiKey()
+    fun initializeSdk() {
+        val sdk = SmartSpectraSdk.shared
+        sdk.config.apiKey = getApiKey()
 
-            // Disable raw bitmap output — we render the CameraX PreviewView directly
-            imageOutputEnabled = false
+        // Disable raw bitmap output — we render the CameraX PreviewView directly
+        sdk.config.imageOutputEnabled = false
 
-            // Request the full cardio + breathing + expression metric bundle
-            requestedMetrics =
-                SmartSpectraConfig.cardioMetrics +
-                SmartSpectraConfig.breathingMetrics +
-                listOf(MetricType.EXPRESSIONS)
-        }
-
-        // Initialize the shared SDK singleton with our config
-        SmartSpectraSdk.initialize(context, config)
+        // Request the full cardio + breathing + expression metric bundle
+        sdk.config.requestedMetrics =
+            SmartSpectraConfig.cardioMetrics +
+            SmartSpectraConfig.breathingMetrics +
+            listOf(MetricType.EXPRESSIONS)
 
         Log.i(TAG, "SmartSpectraSdk initialized (cardio + breathing + expressions, custom input mode).")
     }

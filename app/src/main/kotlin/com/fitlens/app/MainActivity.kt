@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // ── Configure SDK once via PresageManager ─────────────────────────
-        presageManager.initializeSdk(this)
+        presageManager.initializeSdk()
 
         setContent { FitLensScreen() }
     }
