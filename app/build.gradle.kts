@@ -164,11 +164,6 @@ dependencies {
     implementation("com.google.firebase:firebase-appcheck-playintegrity")
     implementation("com.google.firebase:firebase-appcheck-debug")
 
-    // ADK Kotlin for Android
-    compileOnly("com.google.adk:google-adk-kotlin-core-android:0.1.0")
-    // Note: KSP processor and model adapter pinned for ADK Kotlin
-    // ksp("com.google.adk:google-adk-kotlin-processor:0.1.0")
-    // implementation("com.google.adk:google-adk-kotlin-firebase-android:0.1.0")
 
     // Room Database
     val roomVersion = "2.6.1"
