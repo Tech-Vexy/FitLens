@@ -49,6 +49,12 @@ jobs:
       - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Install Android SDK Platform 36
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          packages: "platforms;android-36"
+
       - name: Configure Presage API key
         env:
           PRESAGE_API_KEY: ${{ secrets.PRESAGE_API_KEY }}

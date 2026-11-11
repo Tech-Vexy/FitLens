@@ -1,4 +1,4 @@
-package com.fitlens.app.data.sync
+package com.fitlens.app.data.privacy
 
 import android.util.Log
 

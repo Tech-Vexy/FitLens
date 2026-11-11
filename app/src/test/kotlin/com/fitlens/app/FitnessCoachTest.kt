@@ -348,7 +348,7 @@ class FitnessCoachTest {
 
     @Test
     fun testLocalSqliteHealthDataPrivacyGuarantee() {
-        val isLocalOnly = com.fitlens.app.data.sync.LocalHealthDataPrivacyEnforcer.verifyLocalOnlyStorage()
+        val isLocalOnly = com.fitlens.app.data.privacy.LocalHealthDataPrivacyEnforcer.verifyLocalOnlyStorage()
         assertTrue("Health vitals must be confined strictly to local SQLite", isLocalOnly)
     }
 
