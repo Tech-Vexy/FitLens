@@ -4,10 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.core.ImageProxy
-import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
-import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions.ImageProcessingOptionsMode
-import com.google.mediapipe.tasks.vision.pose_landmarker.PoseLandmarker
-import com.google.mediapipe.tasks.vision.pose_landmarker.PoseLandmarkerResult
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
+import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import kotlin.math.abs
 import kotlin.math.atan2
 
@@ -94,9 +94,6 @@ class PoseLandmarkManager(
 
     // MediaPipe PoseLandmarker instance (lazy-initialized on first frame)
     @Volatile private var mpLandmarker: PoseLandmarker? = null
-    private val mpImageProcessingOptions = ImageProcessingOptions.builder()
-        .setMode(ImageProcessingOptionsMode.IMAGE)
-        .build()
 
     /**
      * Initializes the MediaPipe PoseLandmarker on the first call to [analyzeFrame].
@@ -111,6 +108,7 @@ class PoseLandmarkManager(
                             .setModelAssetPath("pose_landmarker.task")
                             .build()
                     )
+                    .setRunningMode(RunningMode.IMAGE)
                     .setMinPoseDetectionConfidence(0.5f)
                     .setMinPoseTrackingConfidence(0.5f)
                     .setMinPosePresenceConfidence(0.5f)
@@ -138,9 +136,11 @@ class PoseLandmarkManager(
             ?: return analyzeLandmarks(emptyMap())
 
         return runCatching {
-            // Convert ImageProxy to Bitmap for MediaPipe
+            // Convert ImageProxy to Bitmap, then to MediaPipe MPImage
             val bitmap = imageProxy.toBitmap()
-            val mpResult = landmarker.detect(bitmap)
+            val mpImage = BitmapImageBuilder(bitmap).build()
+            val mpResult = landmarker.detect(mpImage)
+            mpImage.close()
             bitmap.recycle()
 
             // Convert MediaPipe landmarks to our LandmarkPoint format

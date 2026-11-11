@@ -2,7 +2,7 @@ package com.fitlens.app
 
 import android.app.Application
 import android.util.Log
-import com.google.firebase.FirebaseApp
+import com.google.firebase.Firebase
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
@@ -20,15 +20,7 @@ class FitLensApp : Application() {
 
     private fun initFirebaseAppCheck() {
         try {
-            val firebaseApp = FirebaseApp.initializeApp(this)
-            if (firebaseApp == null) {
-                Log.e(
-                    TAG,
-                    "Firebase is not configured. Add app/google-services.json before using Firebase AI Logic."
-                )
-                return
-            }
-
+            Firebase.initialize(this)
             val firebaseAppCheck = FirebaseAppCheck.getInstance()
             firebaseAppCheck.setTokenAutoRefreshEnabled(true)
 

@@ -1,6 +1,7 @@
 package com.fitlens.app.ai.firebase
 
-import com.google.firebase.ai.FirebaseAI
+import com.google.firebase.Firebase
+import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
 
 /**
@@ -17,8 +18,8 @@ class FirebaseAiService(
     }
 
     private val model by lazy {
-        FirebaseAI
-            .getInstance(GenerativeBackend.googleAI())
+        Firebase
+            .ai(backend = GenerativeBackend.googleAI())
             .generativeModel(modelName)
     }
 

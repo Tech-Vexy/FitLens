@@ -114,9 +114,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private val sdkValidationObserver = Observer<String?> { hint ->
-        if (!hint.isNullOrEmpty()) {
-            android.util.Log.d("WorkoutViewModel", "SmartSpectra validation: $hint")
+    private val sdkValidationObserver = Observer<com.presagetech.smartspectra.ValidationStatus?> { status ->
+        status?.hint?.let { hint ->
+            if (!hint.isNullOrEmpty()) {
+                android.util.Log.d("WorkoutViewModel", "SmartSpectra validation: $hint")
+            }
         }
     }
 
