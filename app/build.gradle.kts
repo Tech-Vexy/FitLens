@@ -153,7 +153,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
-    implementation("com.presagetech:smartspectra:3.5.0")
+    implementation("com.presagetech:smartspectra:3.4.0")
 
     // MediaPipe Pose Estimation
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
