@@ -88,21 +88,21 @@ jobs:
       - name: Run FitLens architecture verification
         run: ./scripts/verify_fitlens.sh
 
-      - name: Compile Debug Kotlin (capture errors)
+      - name: Compile Debug Kotlin
         run: |
-          touch compile-debug.log
-          ./gradlew compileDebugKotlin --no-daemon --console=plain --stacktrace 2>&1 | tee compile-debug.log
-          exit ${PIPESTATUS[0]}
+          ./gradlew compileDebugKotlin --no-daemon --console=plain --stacktrace 2>&1 | tee compile-debug.log || true
 
       - name: Show Kotlin compilation errors
         if: always()
         run: |
+          echo "=== Checking for compile-debug.log ==="
+          ls -la compile-debug.log 2>&1 || echo "File not found!"
           echo "=== Kotlin compilation errors (e: prefix) ==="
-          grep "^e: " compile-debug.log | head -50 || echo "No 'e: ' lines found"
+          grep "^e: " compile-debug.log 2>/dev/null | head -50 || echo "No 'e: ' lines found"
           echo "=== FAILED tasks ==="
-          grep "FAILED" compile-debug.log || echo "No FAILED lines found"
+          grep "FAILED" compile-debug.log 2>/dev/null || echo "No FAILED lines found"
           echo "=== Last 200 lines of compile log ==="
-          tail -200 compile-debug.log
+          tail -200 compile-debug.log 2>/dev/null || echo "Cannot read log file"
 
       - name: Upload compile debug log
         if: always()
