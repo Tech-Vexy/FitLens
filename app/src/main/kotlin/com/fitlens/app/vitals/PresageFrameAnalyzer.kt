@@ -5,6 +5,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.fitlens.app.data.profile.UserProfile
 import com.presagetech.smartspectra.FrameSubmissionResult
+import com.presagetech.smartspectra.ProcessingStatus
 import com.presagetech.smartspectra.SmartSpectraSdk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,10 +95,17 @@ class PresageFrameAnalyzer(
      * required by the SDK contract.
      */
     override fun analyze(imageProxy: ImageProxy) {
-        val sdk = SmartSpectraSdk.shared
-        // Only submit frames while the SDK pipeline is active
         try {
+            // Skip submission entirely while the SDK pipeline isn't running —
+            // the camera stays bound between sessions, and sendFrame() on a
+            // stopped SDK throws, which would mean an exception per frame.
+            when (SmartSpectraSdk.shared.processingStatus.value) {
+                ProcessingStatus.RUNNING, ProcessingStatus.STARTING -> Unit
+                else -> return
+            }
+
             // Lazily obtain the CustomInput handle on the first frame, then reuse it
+            val sdk = SmartSpectraSdk.shared
             val input = customInput ?: sdk.useCustomInput().also { customInput = it }
             when (val result = input.sendFrame(imageProxy)) {
                 is FrameSubmissionResult.Accepted -> Unit

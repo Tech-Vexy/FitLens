@@ -27,9 +27,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.fitlens.app.camera.CameraPreviewView
 import com.fitlens.app.camera.DualStreamAnalyzer
 import com.fitlens.app.pose.PoseLandmarkManager
+import com.fitlens.app.ui.WorkoutAnalyticsScreen
+import com.fitlens.app.ui.WorkoutDestination
+import com.fitlens.app.ui.WorkoutSummaryScreen
+import com.fitlens.app.ui.WorkoutViewModel
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.vitals.PresageManager
 import com.presagetech.smartspectra.ProcessingStatus
@@ -74,16 +82,20 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val WAVEFORM_BUFFER_SIZE = 200
     }
 
     private val sdk by lazy { SmartSpectraSdk.shared }
     private val presageManager = PresageManager()
     private val presageAnalyzer by lazy { PresageFrameAnalyzer() }
     private val poseManager by lazy { PoseLandmarkManager(this) }
+    // This screen only displays SmartSpectra vitals — pose analysis is disabled
+    // to avoid running MediaPipe inference (and discarding the results) every frame.
     private val dualStreamAnalyzer by lazy {
         DualStreamAnalyzer(
             presageAnalyzer = presageAnalyzer,
-            poseManager = poseManager
+            poseManager = poseManager,
+            enablePoseAnalysis = false
         )
     }
 
@@ -100,7 +112,7 @@ class MainActivity : ComponentActivity() {
         // ── Configure SDK once via PresageManager ─────────────────────────
         presageManager.initializeSdk()
 
-        setContent { FitLensScreen() }
+        setContent { FitLensNavHost() }
     }
 
     override fun onPause() {
@@ -156,11 +168,73 @@ class MainActivity : ComponentActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Navigation
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Top-level navigation: vitals dashboard -> workout flow / analytics / summary.
+     * WorkoutViewModel is activity-scoped so workout state survives navigation.
+     */
+    @Composable
+    private fun FitLensNavHost() {
+        val navController = rememberNavController()
+        val workoutViewModel: WorkoutViewModel = viewModel()
+
+        NavHost(navController = navController, startDestination = "vitals") {
+            composable("vitals") {
+                FitLensScreen(
+                    onStartWorkout = { navController.navigate("workout") },
+                    onOpenAnalytics = { navController.navigate("analytics") }
+                )
+            }
+            composable("workout") {
+                WorkoutDestination(
+                    navController = navController,
+                    viewModel = workoutViewModel,
+                    onStartVitals = { startMeasurement() },
+                    onStopVitals = {
+                        lifecycleScope.launch {
+                            runCatching { sdk.stop() }
+                            presageAnalyzer.resetCustomInput()
+                        }
+                    }
+                )
+            }
+            composable("summary") {
+                val session by workoutViewModel.lastSavedSession.collectAsState()
+                val insight by workoutViewModel.latestInsight.collectAsState()
+                WorkoutSummaryScreen(
+                    session = session,
+                    insight = insight,
+                    onReturnToDashboard = {
+                        navController.navigate("vitals") {
+                            popUpTo("vitals") { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
+            composable("analytics") {
+                val sessions by workoutViewModel.workoutHistory.collectAsState()
+                val insight by workoutViewModel.latestInsight.collectAsState()
+                WorkoutAnalyticsScreen(
+                    sessions = sessions,
+                    insight = insight,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // Compose UI
     // ─────────────────────────────────────────────────────────────────────
 
     @Composable
-    private fun FitLensScreen() {
+    private fun FitLensScreen(
+        onStartWorkout: () -> Unit = {},
+        onOpenAnalytics: () -> Unit = {}
+    ) {
         // ── Observe SDK LiveData as Compose State ─────────────────────────
         val processingStatus by sdk.processingStatus.observeAsState(ProcessingStatus.IDLE)
         val validationStatus by sdk.validationStatus.observeAsState(null)
@@ -196,30 +270,30 @@ class MainActivity : ComponentActivity() {
             if (m.hasCardio()) {
                 m.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.value?.let { pulseRate = it.toDouble() }
                 m.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.rmssd?.let { hrvRmssd = it }
-                m.cardio.arterialPressureTraceList.forEach { s ->
-                    if (s.timestamp > latestPressureTs) {
-                        latestPressureTs = s.timestamp
-                        pressureBuf.add(s.value)
-                        if (pressureBuf.size > 200) pressureBuf.removeAt(0)
-                    }
-                }
+                latestPressureTs = drainTraceWindow(
+                    samples = m.cardio.arterialPressureTraceList,
+                    latestTimestamp = latestPressureTs,
+                    buffer = pressureBuf,
+                    timestampOf = { it.timestamp },
+                    valueOf = { it.value }
+                )
             }
             if (m.hasBreathing()) {
                 m.breathing.rateList.lastOrNull()?.value?.let { breathRate = it.toDouble() }
-                m.breathing.upperTraceList.forEach { s ->
-                    if (s.timestamp > latestChestTs) {
-                        latestChestTs = s.timestamp
-                        chestBuf.add(s.value)
-                        if (chestBuf.size > 200) chestBuf.removeAt(0)
-                    }
-                }
-                m.breathing.lowerTraceList.forEach { s ->
-                    if (s.timestamp > latestAbdomenTs) {
-                        latestAbdomenTs = s.timestamp
-                        abdomenBuf.add(s.value)
-                        if (abdomenBuf.size > 200) abdomenBuf.removeAt(0)
-                    }
-                }
+                latestChestTs = drainTraceWindow(
+                    samples = m.breathing.upperTraceList,
+                    latestTimestamp = latestChestTs,
+                    buffer = chestBuf,
+                    timestampOf = { it.timestamp },
+                    valueOf = { it.value }
+                )
+                latestAbdomenTs = drainTraceWindow(
+                    samples = m.breathing.lowerTraceList,
+                    latestTimestamp = latestAbdomenTs,
+                    buffer = abdomenBuf,
+                    timestampOf = { it.timestamp },
+                    valueOf = { it.value }
+                )
             }
             if (m.hasFace()) {
                 m.face.expressionList.lastOrNull()?.scoresList
@@ -347,6 +421,37 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                // App navigation: Workout flow + Analytics
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = onStartWorkout,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = VIOLET)
+                    ) {
+                        Text(
+                            "Start Workout",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.Black
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onOpenAnalytics,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Analytics", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                    }
+                }
+
                 // Start / Stop button
                 Button(
                     onClick = { toggleMeasurement() },
@@ -377,6 +482,45 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Trace draining helper
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Appends only the samples newer than [latestTimestamp] to [buffer] and
+     * returns the newest timestamp seen. SDK traces are cumulative and
+     * time-ordered, so scanning backwards and stopping at the first already-seen
+     * timestamp costs O(new samples) per emission instead of O(entire trace).
+     */
+    private fun <T> drainTraceWindow(
+        samples: List<T>,
+        latestTimestamp: Long,
+        buffer: MutableList<Float>,
+        timestampOf: (T) -> Long,
+        valueOf: (T) -> Float
+    ): Long {
+        if (samples.isEmpty()) return latestTimestamp
+
+        val fresh = ArrayList<Float>(16)
+        var newestTs = latestTimestamp
+        var i = samples.size - 1
+        while (i >= 0) {
+            val ts = timestampOf(samples[i])
+            if (ts <= latestTimestamp) break
+            newestTs = maxOf(newestTs, ts)
+            fresh.add(valueOf(samples[i]))
+            i--
+        }
+        if (fresh.isEmpty()) return latestTimestamp
+
+        // fresh holds newest→oldest; append oldest→newest to keep the waveform ordered.
+        for (j in fresh.indices.reversed()) {
+            buffer.add(fresh[j])
+        }
+        while (buffer.size > WAVEFORM_BUFFER_SIZE) buffer.removeAt(0)
+        return newestTs
     }
 
     // ─────────────────────────────────────────────────────────────────────

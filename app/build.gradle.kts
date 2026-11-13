@@ -14,6 +14,7 @@ if (file("google-services.json").exists()) {
 android {
     namespace = "com.fitlens.app"
     compileSdk = 36
+    buildToolsVersion = "34.0.0"
 
     signingConfigs {
         create("release") {

@@ -2,6 +2,7 @@ package com.fitlens.app.pose
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.ImageFormat
 import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.google.mediapipe.framework.image.BitmapImageBuilder
@@ -70,6 +71,7 @@ class PoseLandmarkManager(
 ) {
     companion object {
         private const val TAG = "PoseLandmarkManager"
+        private const val MAX_ANALYSIS_DIM = 640
 
         // MediaPipe Pose landmark indices
         const val NOSE = 0
@@ -91,10 +93,22 @@ class PoseLandmarkManager(
     private var repCount: Int = 0
     private var currentPhase: RepPhase = RepPhase.START
     private var minAngleObserved: Double = 180.0
+    // Counts distinct critical-fault episodes (per joint), not per-frame occurrences,
+    // so form accuracy doesn't decay to zero during sustained bad form.
     private var totalDeviationsCount: Int = 0
+    private var previousCriticalJoints: Set<String> = emptySet()
 
     // MediaPipe PoseLandmarker instance (lazy-initialized on first frame)
     @Volatile private var mpLandmarker: PoseLandmarker? = null
+
+    // Scratch buffers reused across frames. A full-res YUV_420_888 frame would
+    // otherwise allocate a multi-MB IntArray + Bitmap on every camera frame.
+    // analyzeFrame only runs on the single-threaded CameraX executor.
+    private var scratchRow: ByteArray? = null
+    private var scratchPixels: IntArray? = null
+    private var scratchBitmap: Bitmap? = null
+    private var scratchBitmapW = 0
+    private var scratchBitmapH = 0
 
     /**
      * Initializes the MediaPipe PoseLandmarker on the first call to [analyzeFrame].
@@ -131,9 +145,16 @@ class PoseLandmarkManager(
      * The caller (DualStreamAnalyzer) is responsible for closing the ImageProxy
      * after this method returns.
      */
+    @Synchronized
     fun analyzeFrame(imageProxy: ImageProxy): PoseAnalysisFrame {
         val landmarker = ensureLandmarker()
             ?: return analyzeLandmarks(emptyMap())
+
+        // MediaPipe pose requires YUV_420_888; bail out cleanly for other formats.
+        if (imageProxy.format != ImageFormat.YUV_420_888) {
+            Log.w(TAG, "Unsupported image format: ${imageProxy.format}")
+            return analyzeLandmarks(emptyMap())
+        }
 
         return runCatching {
             // Convert ImageProxy to Bitmap, then to MediaPipe MPImage
@@ -141,10 +162,9 @@ class PoseLandmarkManager(
             val mpImage = BitmapImageBuilder(bitmap).build()
             val mpResult = landmarker.detect(mpImage)
             mpImage.close()
-            bitmap.recycle()
+            // bitmap is a reused scratch buffer — do NOT recycle it here.
 
-            // Convert MediaPipe landmarks to our LandmarkPoint format
-            val landmarks = landmarksFromMediaPipe(mpResult, imageProxy.width, imageProxy.height)
+            val landmarks = landmarksFromMediaPipe(mpResult)
             analyzeLandmarks(landmarks)
         }.getOrElse { e ->
             Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
@@ -153,62 +173,108 @@ class PoseLandmarkManager(
     }
 
     /**
-     * Converts a CameraX ImageProxy (YUV_420_888) to an ARGB_8888 Bitmap for MediaPipe.
-     * Extracts the Y (luminance) plane and creates a grayscale bitmap.
+     * Converts a CameraX ImageProxy (YUV_420_888) to a downscaled ARGB_8888 Bitmap
+     * for MediaPipe, reading only the Y (luminance) plane as a grayscale approximation.
+     *
+     * The frame is downscaled to at most [MAX_ANALYSIS_DIM] pixels on the long edge:
+     * MediaPipe internally resizes to its model input anyway, and pose landmarks are
+     * normalized coordinates, so detection accuracy is unaffected while per-frame
+     * conversion + inference cost drops substantially.
+     *
+     * The plane buffer is duplicated before reading so the original buffer position is
+     * preserved for downstream consumers of the same ImageProxy (e.g. SmartSpectra rPPG),
+     * and rowStride/pixelStride are honored so padded or subsampled planes decode correctly.
+     *
+     * Row/pixel/bitmap scratch buffers are reused across frames; the returned Bitmap
+     * is overwritten on the next call and must not be retained or recycled by callers.
      */
     private fun ImageProxy.toBitmap(): Bitmap {
-        val buffer = planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        // For YUV_420_888, we create a grayscale approximation from Y plane
-        val ySize = bytes.size
+        val yPlane = planes[0]
+        val rowStride = yPlane.rowStride
+        val pixelStride = yPlane.pixelStride
         val w = width
         val h = height
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(w * h)
-        for (i in 0 until ySize.coerceAtMost(w * h)) {
-            val y = bytes[i].toInt() and 0xFF
-            pixels[i] = -0x1000000 or (y shl 16) or (y shl 8) or y
+
+        val stride = maxOf(1, maxOf(w, h) / MAX_ANALYSIS_DIM)
+        val outW = (w + stride - 1) / stride
+        val outH = (h + stride - 1) / stride
+
+        val buffer = yPlane.buffer.duplicate()
+        val rowBytes = w * pixelStride
+        var row = scratchRow
+        if (row == null || row.size < rowBytes) {
+            row = ByteArray(rowBytes)
+            scratchRow = row
         }
-        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        var pixels = scratchPixels
+        if (pixels == null || pixels.size < outW * outH) {
+            pixels = IntArray(outW * outH)
+            scratchPixels = pixels
+        }
+        val px = pixels
+        val rw = row
+
+        for (oy in 0 until outH) {
+            val sy = oy * stride
+            buffer.position(sy * rowStride)
+            // Read exactly rowBytes — the scratch row may be larger than this
+            // frame's row when reused across resolution changes.
+            buffer.get(rw, 0, rowBytes)
+            val rowOffset = oy * outW
+            for (ox in 0 until outW) {
+                val v = rw[ox * stride * pixelStride].toInt() and 0xFF
+                px[rowOffset + ox] = -0x1000000 or (v shl 16) or (v shl 8) or v
+            }
+        }
+
+        var bitmap = scratchBitmap
+        if (bitmap == null || scratchBitmapW != outW || scratchBitmapH != outH || bitmap.isRecycled) {
+            bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            scratchBitmap = bitmap
+            scratchBitmapW = outW
+            scratchBitmapH = outH
+        }
+        bitmap!!.setPixels(px, 0, outW, 0, 0, outW, outH)
         return bitmap
     }
 
     /**
      * Converts MediaPipe PoseLandmarkerResult to our LandmarkPoint map.
+     * Only the highest-confidence (first) detected pose is used; merging multiple
+     * detected poses would corrupt joint-angle calculations.
      */
-    private fun landmarksFromMediaPipe(
-        result: PoseLandmarkerResult,
-        imageWidth: Int,
-        imageHeight: Int
-    ): Map<Int, LandmarkPoint> {
+    private fun landmarksFromMediaPipe(result: PoseLandmarkerResult): Map<Int, LandmarkPoint> {
         val map = mutableMapOf<Int, LandmarkPoint>()
-        result.landmarks().forEachIndexed { categoryIndex, pose ->
-            pose.forEachIndexed { landmarkIndex, landmark ->
-                // Normalize coordinates to 0..1 range
-                val x = landmark.x().coerceIn(0f, 1f)
-                val y = landmark.y().coerceIn(0f, 1f)
-                val z = landmark.z()
-                val visibility = landmark.visibility().orElse(1.0f)
-                map[landmarkIndex] = LandmarkPoint(x, y, z, visibility)
-            }
+        val pose = result.landmarks().firstOrNull() ?: return emptyMap()
+        pose.forEachIndexed { landmarkIndex, landmark ->
+            val x = landmark.x().coerceIn(0f, 1f)
+            val y = landmark.y().coerceIn(0f, 1f)
+            val z = landmark.z()
+            val visibility = landmark.visibility().orElse(1.0f)
+            map[landmarkIndex] = LandmarkPoint(x, y, z, visibility)
         }
         return map
     }
 
+    @Synchronized
     fun setExercise(exercise: String) {
         activeExercise = exercise
+        totalDeviationsCount = 0
         resetRepCounter()
     }
 
+    @Synchronized
     fun resetRepCounter() {
         repCount = 0
         currentPhase = RepPhase.START
         minAngleObserved = 180.0
-        totalDeviationsCount = 0
+        previousCriticalJoints = emptySet()
     }
 
+    @Synchronized
     fun getTotalDeviations(): Int = totalDeviationsCount
+
+    @Synchronized
     fun getRepCount(): Int = repCount
 
     /**
@@ -225,7 +291,10 @@ class PoseLandmarkManager(
 
     /**
      * Analyzes landmark map, detects reps, and checks exercise form.
+     * Synchronized because it is invoked from the CameraX analyzer thread and
+     * (for simulation/testing) potentially the main thread.
      */
+    @Synchronized
     fun analyzeLandmarks(landmarks: Map<Int, LandmarkPoint>): PoseAnalysisFrame {
         val deviations = mutableListOf<FormDeviation>()
         var primaryAngle = 180.0
@@ -254,11 +323,24 @@ class PoseLandmarkManager(
             }
         }
 
-        if (deviations.isNotEmpty()) {
-            totalDeviationsCount += deviations.count { it.severity == DeviationSeverity.CRITICAL }
-        }
+        // Count each critical joint fault once per episode (when it first appears),
+        // not once per frame — otherwise sustained bad form inflates the count.
+        val criticalJoints = deviations
+            .filter { it.severity == DeviationSeverity.CRITICAL }
+            .map { it.jointName }
+            .toSet()
+        totalDeviationsCount += criticalJoints.count { it !in previousCriticalJoints }
+        previousCriticalJoints = criticalJoints
 
-        val formScore = maxOf(0f, 100f - (totalDeviationsCount * 2.5f))
+        // Form score reflects the current frame's deviations, not the cumulative total.
+        val framePenalty = deviations.sumOf {
+            when (it.severity) {
+                DeviationSeverity.CRITICAL -> 30f
+                DeviationSeverity.WARNING -> 10f
+                DeviationSeverity.INFO -> 3f
+            }
+        }
+        val formScore = maxOf(0f, 100f - framePenalty)
 
         return PoseAnalysisFrame(
             landmarks = landmarks,

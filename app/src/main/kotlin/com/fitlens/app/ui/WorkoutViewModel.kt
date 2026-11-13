@@ -11,7 +11,9 @@ import com.fitlens.app.data.WorkoutDatabase
 import com.fitlens.app.data.WorkoutRepository
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserPreferencesRepository
+import com.fitlens.app.pose.DeviationSeverity
 import com.fitlens.app.pose.LandmarkPoint
+import com.fitlens.app.pose.PoseAnalysisFrame
 import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.workout.ProgressAnalyzer
@@ -30,6 +32,12 @@ import kotlin.math.roundToInt
 
 class WorkoutViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        // The SDK emits a cumulative arterial-pressure trace; cap what we retain
+        // per reading so memory and waveform redraw cost stay bounded per session.
+        private const val MAX_WAVEFORM_SAMPLES = 120
+    }
+
     private val coachAgent = FitnessCoachAgent()
     private val poseManager = PoseLandmarkManager(application)
     private val vitalsAnalyzer = PresageFrameAnalyzer()
@@ -40,7 +48,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     val dualStreamAnalyzer = DualStreamAnalyzer(
         presageAnalyzer = vitalsAnalyzer,
-        poseManager = poseManager
+        poseManager = poseManager,
+        onPoseFrame = { frame -> onCameraPoseFrame(frame) }
     )
 
     private val repository: WorkoutRepository by lazy {
@@ -74,7 +83,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     // Active session local buffer for SQLite persistence
     private val activeVitalsBuffer = mutableListOf<com.fitlens.app.data.model.VitalsLogEntity>()
-    private val activeFaultsBuffer = mutableListOf<com.fitlens.app.data.model.BiomechanicalFaultEntity>()
+    // Written from the CameraX analyzer thread; CopyOnWriteArrayList keeps iteration safe.
+    private val activeFaultsBuffer = java.util.concurrent.CopyOnWriteArrayList<com.fitlens.app.data.model.BiomechanicalFaultEntity>()
+
+    // Fault-logging dedupe state (camera analyzer thread)
+    @Volatile private var lastFaultSignature: String? = null
+    @Volatile private var lastFaultLogAt: Long = 0L
+
+    // Guards against persisting the same workout twice (manual finish racing
+    // the auto-completion path). Reset on every startWorkout().
+    @Volatile private var sessionPersisted = false
 
     // Observers kept for cleanup in onCleared (ViewModel has no LifecycleOwner)
     private val sdkMetricsObserver = Observer<com.presagetech.smartspectra.proto.MetricsProto.Metrics?> { metrics ->
@@ -91,8 +109,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 confidence = it.confidence
             }
             metrics.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.let { hrv = it.rmssd }
-            // Collect all arterial pressure samples for waveform display
-            metrics.cardio.arterialPressureTraceList.forEach { trace.add(it.value) }
+            // Keep only the newest window — the proto trace is cumulative, so
+            // copying it wholesale on every emission would grow O(n²) per session.
+            metrics.cardio.arterialPressureTraceList
+                .takeLast(MAX_WAVEFORM_SAMPLES)
+                .forEach { trace.add(it.value) }
         }
         if (metrics.hasBreathing()) {
             metrics.breathing.rateList.lastOrNull()?.let { br = it.value.toDouble() }
@@ -211,6 +232,14 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Drops the cached SmartSpectra CustomInput handle. Call before starting a
+     * new SDK session so the next frames get a fresh handle for the new pipeline.
+     */
+    fun resetVitalsInput() {
+        vitalsAnalyzer.resetCustomInput()
+    }
+
+    /**
      * Toggles audio coaching mute state and propagates it to FitLensAudioCoach.
      * Called from WorkoutSessionScreen's mute button so the UI and TTS stay in sync.
      */
@@ -220,8 +249,52 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         audioCoach.setMuted(newMuted)
     }
 
+    /**
+     * Handles each PoseAnalysisFrame emitted by the CameraX analyzer thread:
+     * feeds the workout state machine, updates the skeleton overlay landmarks,
+     * and buffers critical faults for local SQLite persistence.
+     */
+    private fun onCameraPoseFrame(frame: PoseAnalysisFrame) {
+        // Capture phase before onPoseFrame() — it may transition the workout
+        // (e.g. set completion) within this same call.
+        val wasActiveSet = workoutManager.state.value.phase == WorkoutPhase.ACTIVE_SET
+
+        _currentLandmarks.value = frame.landmarks
+        workoutManager.onPoseFrame(frame)
+
+        val criticalDeviations = frame.activeDeviations.filter {
+            it.severity == DeviationSeverity.CRITICAL
+        }
+        if (criticalDeviations.isEmpty() || !wasActiveSet) return
+
+        // Dedupe: log a fault episode at most once per signature change or every 2s,
+        // so sustained bad form doesn't flood the telemetry table.
+        val signature = criticalDeviations.joinToString("|") { it.jointName }
+        val now = System.currentTimeMillis()
+        if (signature == lastFaultSignature && now - lastFaultLogAt < 2000L) return
+        lastFaultSignature = signature
+        lastFaultLogAt = now
+
+        criticalDeviations.forEach { deviation ->
+            activeFaultsBuffer.add(
+                com.fitlens.app.data.model.BiomechanicalFaultEntity(
+                    sessionId = 0L, // bound to the real session id on finishWorkout()
+                    exerciseName = frame.currentExercise,
+                    jointName = deviation.jointName,
+                    jointAngleDegrees = frame.currentAngle,
+                    faultMessage = deviation.message,
+                    severity = deviation.severity.name
+                )
+            )
+        }
+    }
+
     fun startWorkout(exercise: String = "Bodyweight Squats", targetReps: Int = 10, sets: Int = 3) {        previousRepCount = 0
         previousPhase = WorkoutPhase.ACTIVE_SET
+        lastFaultSignature = null
+        lastFaultLogAt = 0L
+        sessionPersisted = false
+        _lastSavedSession.value = null
         activeVitalsBuffer.clear()
         activeFaultsBuffer.clear()
         workoutManager.startWorkout(exercise, targetReps, sets)
@@ -238,10 +311,18 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun finishWorkout() {
+        // Guard against duplicate/invalid finishes: nothing to save while IDLE,
+        // and each workout persists at most once. COMPLETED is intentionally NOT
+        // rejected — WorkoutManager.completeSet() can flip the phase to COMPLETED
+        // on its own (auto-completion), and this call is what persists that session.
+        val phase = workoutState.value.phase
+        if (phase == WorkoutPhase.IDLE || sessionPersisted) return
+        sessionPersisted = true
+
         val session = workoutManager.finishWorkout()
         viewModelScope.launch {
             val sessionId = repository.saveSession(session)
-            _lastSavedSession.value = session
+            _lastSavedSession.value = session.copy(id = sessionId)
 
             // Persist time-series vitals & faults strictly in local SQLite
             if (activeVitalsBuffer.isNotEmpty()) {

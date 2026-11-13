@@ -3,6 +3,7 @@ package com.fitlens.app.camera
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.fitlens.app.pose.PoseAnalysisFrame
 import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 
@@ -13,15 +14,16 @@ import com.fitlens.app.vitals.PresageFrameAnalyzer
  *
  * This completely avoids camera device lock contention between the two computer vision libraries.
  *
- * The analyzer forwards each frame to both pipelines. PresageFrameAnalyzer handles the
- * SmartSpectra custom-input submission, while MediaPipe processes the frame for pose landmarks.
- * Since ImageProxy can only be consumed once, MediaPipe receives a copy of the image buffer
- * via the PresageFrameAnalyzer's frame callback mechanism.
+ * Ordering contract: MediaPipe runs FIRST on each ImageProxy because
+ * [PresageFrameAnalyzer.analyze] always closes the proxy when it returns (required by the
+ * SmartSpectra SDK contract). The resulting [PoseAnalysisFrame] is delivered to
+ * [onPoseFrame] so the workout pipeline can consume rep counts, form deviations, and landmarks.
  */
 class DualStreamAnalyzer(
     private val presageAnalyzer: PresageFrameAnalyzer,
     private val poseManager: PoseLandmarkManager,
-    private val onFrameProcessed: (() -> Unit)? = null
+    private val enablePoseAnalysis: Boolean = true,
+    private val onPoseFrame: ((PoseAnalysisFrame) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
 
     companion object {
@@ -29,22 +31,22 @@ class DualStreamAnalyzer(
     }
 
     override fun analyze(imageProxy: ImageProxy) {
-        try {
-            // Forward frame to SmartSpectra custom-input (vitals)
-            presageAnalyzer.analyze(imageProxy)
-
-            // Forward frame to MediaPipe Pose Landmarker (biomechanics)
-            // MediaPipe requires a Bitmap or MpImage; we pass the ImageProxy directly
-            // and let PoseLandmarkManager handle the conversion.
+        // 1. MediaPipe Pose Landmarker (biomechanics) — must run before the proxy is closed.
+        if (enablePoseAnalysis) {
             try {
                 val analysisFrame = poseManager.analyzeFrame(imageProxy)
-                onFrameProcessed?.invoke()
+                onPoseFrame?.invoke(analysisFrame)
             } catch (e: Exception) {
                 Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
             }
+        }
+
+        // 2. SmartSpectra custom-input (vitals) — closes imageProxy in its finally block.
+        try {
+            presageAnalyzer.analyze(imageProxy)
         } catch (e: Exception) {
-            Log.w(TAG, "DualStream frame dispatch failed: ${e.message}")
-            imageProxy.close()
+            Log.w(TAG, "Presage frame dispatch failed: ${e.message}")
+            runCatching { imageProxy.close() }
         }
     }
 }

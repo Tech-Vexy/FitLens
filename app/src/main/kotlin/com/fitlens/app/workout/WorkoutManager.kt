@@ -62,6 +62,7 @@ class WorkoutManager(
     // double-counting when finishWorkout() is called mid-set.
     private var completedRepsAcrossFinishedSets: Int = 0
 
+    @Synchronized
     fun startWorkout(
         exercise: String = "Bodyweight Squats",
         targetReps: Int = 10,
@@ -93,6 +94,9 @@ class WorkoutManager(
         startElapsedTimer()
     }
 
+    // Synchronized: invoked from the CameraX analyzer thread, the main thread
+    // (UI buttons / simulation), and session coroutines.
+    @Synchronized
     fun onPoseFrame(frame: PoseAnalysisFrame) {
         if (_state.value.phase != WorkoutPhase.ACTIVE_SET) return
 
@@ -111,18 +115,24 @@ class WorkoutManager(
                 totalDeviations = poseLandmarkManager.getTotalDeviations()
             )
 
-            // Check if ADK agent advises stopping set due to biomechanical fatigue
-            sessionScope?.launch {
-                val fatigueResult = coachAgent.checkBiomechanicalFatigue(
-                    consecutiveDeviations = consecutiveDeviations,
-                    currentSetReps = newReps,
-                    targetReps = _state.value.targetReps
-                )
-                if (fatigueResult.shouldHaltSet) {
-                    _state.value = _state.value.copy(
-                        activeCoachAlert = "⚠️ " + fatigueResult.correctiveAction
+            // The fatigue tool only halts the set at >=3 consecutive deviations,
+            // and consecutiveDeviations increments once per frame — so checking
+            // exactly at the threshold crossing is sufficient and avoids launching
+            // a coroutine on every frame (~30/sec) during sustained bad form.
+            // The counter resets on any clean frame, so each new episode re-triggers.
+            if (consecutiveDeviations == 3) {
+                sessionScope?.launch {
+                    val fatigueResult = coachAgent.checkBiomechanicalFatigue(
+                        consecutiveDeviations = consecutiveDeviations,
+                        currentSetReps = newReps,
+                        targetReps = _state.value.targetReps
                     )
-                    completeSet()
+                    if (fatigueResult.shouldHaltSet) {
+                        _state.value = _state.value.copy(
+                            activeCoachAlert = "⚠️ " + fatigueResult.correctiveAction
+                        )
+                        completeSet()
+                    }
                 }
             }
         } else {
@@ -130,7 +140,8 @@ class WorkoutManager(
             _state.value = _state.value.copy(
                 activeCoachAlert = if (_state.value.activeCoachAlert?.startsWith("⚠️") == true) null else _state.value.activeCoachAlert,
                 formAccuracyPercentage = frame.formScore,
-                currentJointAngle = frame.currentAngle
+                currentJointAngle = frame.currentAngle,
+                totalDeviations = poseLandmarkManager.getTotalDeviations()
             )
         }
 
@@ -152,9 +163,18 @@ class WorkoutManager(
         )
     }
 
+    @Synchronized
     fun completeSet() {
-        // Record the reps actually completed in this set before transitioning.
+        // Only an in-progress set can be completed. This guards against double-counting
+        // when the rep target and the biomechanical-fatigue halt race, or when
+        // completeSet() is invoked again while already resting.
+        if (_state.value.phase != WorkoutPhase.ACTIVE_SET) return
+
+        // Bank this set's reps and clear the counter so finishWorkout() can't
+        // double-count them if the workout ends during the rest interval.
         completedRepsAcrossFinishedSets += _state.value.completedReps
+        _state.value = _state.value.copy(completedReps = 0)
+
         if (_state.value.currentSet >= _state.value.totalSets) {
             finishWorkout()
         } else {
@@ -216,11 +236,14 @@ class WorkoutManager(
         }
     }
 
+    @Synchronized
     fun skipRest() {
+        if (_state.value.phase != WorkoutPhase.REST_INTERVAL) return
         restTimerJob?.cancel()
         nextSet()
     }
 
+    @Synchronized
     private fun nextSet() {
         poseLandmarkManager.resetRepCounter()
         _state.value = _state.value.copy(
@@ -233,6 +256,7 @@ class WorkoutManager(
         )
     }
 
+    @Synchronized
     fun finishWorkout(): WorkoutSessionEntity {
         timerJob?.cancel()
         restTimerJob?.cancel()
@@ -240,13 +264,15 @@ class WorkoutManager(
         val avgHr = if (hrSamples.isNotEmpty()) hrSamples.average() else 135.0
         val maxHr = if (hrSamples.isNotEmpty()) hrSamples.maxOrNull() ?: 160.0 else 160.0
 
+        // Reps from the set still in progress are only counted when the workout ends
+        // mid-set; finished sets were already banked by completeSet().
+        val inProgressReps =
+            if (_state.value.phase == WorkoutPhase.ACTIVE_SET) _state.value.completedReps else 0
+
         val sessionEntity = WorkoutSessionEntity(
             exerciseName = _state.value.exerciseName,
             targetReps = _state.value.targetReps * _state.value.totalSets,
-            // Use the running total accumulated in completeSet() to avoid double-counting.
-            // If finishWorkout() is called directly (e.g. user taps Finish mid-set), also
-            // add the reps completed so far in the current in-progress set.
-            completedReps = completedRepsAcrossFinishedSets + _state.value.completedReps,
+            completedReps = completedRepsAcrossFinishedSets + inProgressReps,
             durationSeconds = _state.value.elapsedSeconds,
             averageHeartRate = avgHr,
             maxHeartRate = maxHr,

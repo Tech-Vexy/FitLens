@@ -43,7 +43,8 @@ fun WorkoutSessionScreen(
     onCompleteSet: () -> Unit,
     onSkipRest: () -> Unit,
     onFinishWorkout: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    autoRequestCamera: Boolean = false
 ) {
     val context = LocalContext.current
     val isRest = state.phase == WorkoutPhase.REST_INTERVAL
@@ -56,6 +57,22 @@ fun WorkoutSessionScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         showLiveCamera = isGranted
+    }
+
+    // Pose tracking needs the camera — request permission as soon as the
+    // workout screen appears instead of waiting for the camera toggle tap.
+    LaunchedEffect(Unit) {
+        if (autoRequestCamera && !showLiveCamera) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                showLiveCamera = true
+            } else {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
     }
 
     val hasCriticalDeviation = state.activeCoachAlert?.startsWith("⚠️") == true ||
