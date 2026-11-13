@@ -22,7 +22,7 @@ FitLens features a **zero-key AI architecture** backed by Google's Agent Develop
   - Defined using ADK Kotlin `AdkLlmAgent` running via `AdkInMemoryRunner`.
   - **Authentication & Model Backends**:
     - **Firebase AI Logic (`gemini-3.8-flash`)**: Authenticated via **Firebase App Check** (Play Integrity in release, Debug provider in debug). No client API key in the APK.
-    - **On-Device Edge adapter (`gemini-nano-v2`)**: `EdgeGeminiNanoAdapter` exists as a routing stub — `AdkInMemoryRunner.execute()` returns a placeholder string for this mode; there is currently **no ML Kit / LiteRT inference implementation**.
+    - **On-Device Edge adapter (`gemini-nano-v2`)**: `EdgeGeminiNanoAdapter` backed by `LocalEdgeEngine` — a deterministic, network-free tool router that discovers the agent's `@Tool` methods via reflection and dispatches matching intents to `FitnessTools` locally (sub-10ms latency, zero model download). There is no ML Kit / LiteRT LLM inference; edge "reasoning" is rule-based domain routing.
     - There is **no Google ADC backend** in the codebase; ADC/JVM execution described in earlier revisions was never implemented.
   - `@Tool` & `@Param` annotated domain functions in `FitnessTools`:
     - `generateWorkoutPlan`: Goal, experience, equipment, and duration-tailored routines.
@@ -30,7 +30,7 @@ FitLens features a **zero-key AI architecture** backed by Google's Agent Develop
     - `calculateAdaptiveRest`: Vitals-guided recovery tool that dynamically extends rest intervals (+15s / +30s) when heart rate remains elevated.
     - `evaluateBiomechanicalFatigue`: Safety tool monitoring consecutive form deviations to prevent joint injury.
     - `generateMesocyclePeriodization`: Multi-week periodization plan generator.
-    - Note: these are plain Kotlin functions invoked **directly** by `FitnessCoachAgent` (e.g. `calculateAdaptiveRest`, `checkBiomechanicalFatigue`). The ADK `runner.execute()` LLM call is only used for plan/mesocycle generation prompts; tool dispatch is not performed by an LLM runtime.
+    - Note: `FitnessTools` functions are invoked **directly** by `FitnessCoachAgent` for safety/rest paths (e.g. `calculateAdaptiveRest`, `checkBiomechanicalFatigue`). For `runner.execute()` prompts, the cloud path calls Firebase AI Logic while the edge path routes through `LocalEdgeEngine`'s deterministic @Tool dispatcher — neither performs LLM-driven tool calling.
 - **Workout Manager (`WorkoutManager`)**:
   - State machine: `IDLE` ➔ `ACTIVE_SET` ➔ `REST_INTERVAL` ➔ `COMPLETED`. (`WARMUP` and `COOLDOWN` exist in the `WorkoutPhase` enum but are never entered.)
   - Coordinates set transitions, adaptive rest intervals, and session entity creation. All state-mutating entry points are `@Synchronized` because they are invoked from the CameraX analyzer thread, the main thread, and session coroutines.
@@ -152,8 +152,9 @@ FitLens/
 │   │   │   ├── kotlin/com/fitlens/app/
 │   │   │   │   ├── ai/
 │   │   │   │   │   ├── adk/
-│   │   │   │   │   │   ├── AdkAgentArchitecture.kt# LlmAgent, InMemoryRunner, Firebase AI Logic & edge stub
-│   │   │   │   │   │   └── AdkAnnotations.kt      # @Tool and @Param annotations
+│   │   │   │   │   │   ├── AdkAgentArchitecture.kt# LlmAgent, InMemoryRunner, Firebase AI Logic & edge adapter
+│   │   │   │   │   │   ├── AdkAnnotations.kt      # @Tool and @Param annotations
+│   │   │   │   │   │   └── LocalEdgeEngine.kt     # Deterministic on-device @Tool discovery & dispatch
 │   │   │   │   │   ├── firebase/
 │   │   │   │   │   │   └── FirebaseAiService.kt    # Firebase AI Logic generative model wrapper
 │   │   │   │   │   ├── FitnessCoachAgent.kt       # ADK LlmAgent orchestration

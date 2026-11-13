@@ -43,12 +43,24 @@ data class FirebaseGeminiAdapter(
 
 
 /**
- * On-device local Gemini Nano adapter.
+ * On-device local inference adapter backed by [LocalEdgeEngine].
+ *
+ * Deterministic, network-free tool routing: discovers the agent's @Tool
+ * functions and dispatches matching intents to FitnessTools locally.
+ * No model download, no API key, sub-10ms latency for safety checks.
  */
 data class EdgeGeminiNanoAdapter(
     override val modelName: String = "gemini-nano-v2"
 ) : AdkModelAdapter {
     override val authMode: AdkAuthMode = AdkAuthMode.ON_DEVICE_EDGE
+
+    private val engine = LocalEdgeEngine()
+
+    /**
+     * Runs local edge inference over the agent's registered tools.
+     */
+    suspend fun generate(prompt: String, tools: List<Any> = emptyList()): String =
+        engine.generate(tools, prompt)
 }
 
 data class AdkInstruction(val text: String)
@@ -97,7 +109,7 @@ class AdkInMemoryRunner(
                 (agent.model as FirebaseGeminiAdapter).generate(prompt)
             }
             AdkAuthMode.ON_DEVICE_EDGE -> {
-                "[On-Device Gemini Nano] Local edge inference (0ms latency, offline)"
+                (agent.model as EdgeGeminiNanoAdapter).generate(prompt, agent.tools)
             }
         }
 

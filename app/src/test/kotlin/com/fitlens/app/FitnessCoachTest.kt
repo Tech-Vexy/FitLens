@@ -426,4 +426,76 @@ class FitnessCoachTest {
         assertNotNull(agentPlan)
         assertEquals(4, agentPlan.totalWeeks)
     }
+
+    // ------------------------------------------------------------------
+    // LocalEdgeEngine — deterministic on-device ADK tool routing
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testLocalEdgeEngineRoutesWorkoutPlan() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "Generate a hypertrophy workout plan for 30 minutes"
+        )
+        assertTrue(response.contains("Workout plan"))
+        assertTrue(response.contains("Hypertrophy"))
+        assertTrue(response.contains("30 min"))
+    }
+
+    @Test
+    fun testLocalEdgeEngineRoutesAdaptiveRest() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "Calculate adaptive rest for 45 seconds at heart rate 155 bpm"
+        )
+        assertTrue(response.contains("Rest adjusted"))
+        // HR 155 - resting 70 = 85 delta > 65 -> extended by 30s
+        assertTrue(response.contains("75s"))
+    }
+
+    @Test
+    fun testLocalEdgeEngineRoutesFatigueCheck() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "Evaluate biomechanical fatigue with 4 consecutive deviations at rep 6 of 10"
+        )
+        assertTrue(response.contains("Set halted"))
+    }
+
+    @Test
+    fun testLocalEdgeEngineRoutesMesocycle() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "Generate a 6 week strength mesocycle"
+        )
+        assertTrue(response.contains("mesocycle"))
+        assertTrue(response.contains("6-week"))
+    }
+
+    @Test
+    fun testLocalEdgeEngineFallbackOnNoMatch() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "xyzzy plugh frobnicate"
+        )
+        assertTrue(response.contains("On-Device Edge"))
+    }
+
+    @Test
+    fun testEdgeAdapterExecuteReturnsRealToolResult() = runBlocking {
+        val agent = FitnessCoachAgent(
+            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+        )
+        val response = agent.runner.execute(
+            "Evaluate biomechanical fatigue with 3 consecutive deviations at rep 8 of 10"
+        )
+        // Edge path must produce a real tool result, not the old placeholder string.
+        assertFalse(response.contains("Local edge inference"))
+        assertTrue(response.contains("Set halted") || response.contains("Form check"))
+    }
 }
