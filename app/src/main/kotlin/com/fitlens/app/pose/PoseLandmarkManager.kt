@@ -127,7 +127,6 @@ class PoseLandmarkManager(
                     .setMinPoseDetectionConfidence(0.5f)
                     .setMinPosePresenceConfidence(0.5f)
                     .setOutputSegmentationMasks(false)
-                    .setOutputLandmarksWorldCoordinates(true)
                     .build()
                 PoseLandmarker.createFromOptions(ctx, options).also {
                     mpLandmarker = it
@@ -333,13 +332,13 @@ class PoseLandmarkManager(
         previousCriticalJoints = criticalJoints
 
         // Form score reflects the current frame's deviations, not the cumulative total.
-        val framePenalty = deviations.sumOf {
+        val framePenalty = deviations.map {
             when (it.severity) {
                 DeviationSeverity.CRITICAL -> 30f
                 DeviationSeverity.WARNING -> 10f
                 DeviationSeverity.INFO -> 3f
             }
-        }
+        }.sum()
         val formScore = maxOf(0f, 100f - framePenalty)
 
         return PoseAnalysisFrame(
