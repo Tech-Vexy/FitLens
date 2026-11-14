@@ -22,9 +22,12 @@
 -keep @androidx.room.Entity class com.fitlens.app.data.model.** { *; }
 -keep @androidx.room.Dao interface com.fitlens.app.data.dao.** { *; }
 
-# 3. MediaPipe Pose Estimation & JNI
+# 3. MediaPipe Pose Estimation & JNI (plus AutoValue processor transitive refs)
 -keep class com.google.mediapipe.** { *; }
 -dontwarn com.google.mediapipe.**
+-dontwarn javax.lang.model.**
+-dontwarn com.google.auto.value.processor.**
+-dontwarn autovalue.shaded.**
 
 # 4. Presage SmartSpectra SDK & Protobuf Messages (MetricsProto / InsightsProto)
 -keep class com.presagetech.smartspectra.** { *; }
