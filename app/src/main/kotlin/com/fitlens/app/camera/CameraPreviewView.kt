@@ -1,7 +1,16 @@
 package com.fitlens.app.camera
 
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import android.util.Range
+import android.view.Surface
 import android.view.ViewGroup
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -24,6 +33,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executors
 
+@OptIn(ExperimentalCamera2Interop::class)
 @Composable
 fun CameraPreviewView(
     analyzer: ImageAnalysis.Analyzer,
@@ -35,7 +45,17 @@ fun CameraPreviewView(
     var hasCameraError by remember { mutableStateOf(false) }
     val currentAnalyzer by rememberUpdatedState(analyzer)
     val cameraProviderHolder = remember { arrayOfNulls<ProcessCameraProvider>(1) }
-    val previewViewHolder = remember { arrayOfNulls<PreviewView>(1) }
+
+    // Create PreviewView eagerly in remember so LaunchedEffect never sees a null view
+    val previewView = remember {
+        PreviewView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+    }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
@@ -46,21 +66,39 @@ fun CameraPreviewView(
 
     // Rebind CameraX whenever the user flips between front and rear camera
     LaunchedEffect(useFrontCamera) {
-        val previewView = previewViewHolder[0] ?: return@LaunchedEffect
         hasCameraError = false
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
+                val targetFpsRange = selectTargetFpsRange(context, useFrontCamera)
+                val displayRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+
+                val previewBuilder = Preview.Builder()
+                    .setTargetRotation(displayRotation)
+                targetFpsRange?.let { fps ->
+                    Camera2Interop.Extender(previewBuilder)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
+                }
+                val preview = previewBuilder.build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
-                val imageAnalysis = ImageAnalysis.Builder()
+
+                // Match SmartSpectra's headless CameraX contract:
+                // upright rotated YUV_420_888 frames at >=25-30 fps, keep-only-latest.
+                val analysisBuilder = ImageAnalysis.Builder()
+                    .setTargetRotation(displayRotation)
+                    .setOutputImageRotationEnabled(true)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also {
-                        it.setAnalyzer(cameraExecutor, currentAnalyzer)
-                    }
+                targetFpsRange?.let { fps ->
+                    Camera2Interop.Extender(analysisBuilder)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
+                }
+                val imageAnalysis = analysisBuilder.build().also {
+                    it.setAnalyzer(cameraExecutor, currentAnalyzer)
+                }
+
                 val cameraSelector = if (useFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
@@ -104,17 +142,39 @@ fun CameraPreviewView(
         }
     } else {
         AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    previewViewHolder[0] = this
-                }
-            },
+            factory = { previewView },
             modifier = modifier.fillMaxSize()
         )
     }
+}
+
+/**
+ * Selects a camera AE target FPS range >= 25 fps (preferring [30, 30]) so SmartSpectra
+ * receives a sustained frame rate without triggering SUSTAINED_LOW_FRAME_RATE.
+ */
+private fun selectTargetFpsRange(context: Context, useFrontCamera: Boolean): Range<Int>? {
+    return runCatching {
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            ?: return null
+        val desiredFacing = if (useFrontCamera) {
+            CameraCharacteristics.LENS_FACING_FRONT
+        } else {
+            CameraCharacteristics.LENS_FACING_BACK
+        }
+        for (id in manager.cameraIdList) {
+            val chars = manager.getCameraCharacteristics(id)
+            if (chars.get(CameraCharacteristics.LENS_FACING) == desiredFacing) {
+                val ranges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?: continue
+                val best = ranges
+                    .filter { it.upper >= 30 && it.lower >= 25 }
+                    .maxByOrNull { it.lower * 100 + it.upper }
+                if (best != null) {
+                    Log.d("CameraPreviewView", "Selected AE target FPS range: $best")
+                    return best
+                }
+            }
+        }
+        null
+    }.getOrNull()
 }

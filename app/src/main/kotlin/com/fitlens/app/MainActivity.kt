@@ -157,6 +157,7 @@ class MainActivity : ComponentActivity() {
                     return@withLock
                 }
                 runCatching {
+                    workoutViewModel.clearVitalsSession()
                     workoutViewModel.prepareVitalsCustomInput()
                     sdk.start()
                     Log.d(TAG, "SmartSpectra SDK started (custom input mode)")

@@ -103,9 +103,8 @@ class PresageFrameAnalyzer(
 
     override fun analyze(imageProxy: ImageProxy) {
         try {
-            when (SmartSpectraSdk.shared.processingStatus.value) {
-                ProcessingStatus.RUNNING, ProcessingStatus.STARTING -> Unit
-                else -> return
+            if (SmartSpectraSdk.shared.processingStatus.value != ProcessingStatus.RUNNING) {
+                return
             }
 
             val input = customInput ?: return

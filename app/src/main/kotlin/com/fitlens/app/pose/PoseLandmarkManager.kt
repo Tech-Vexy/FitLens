@@ -76,7 +76,7 @@ class PoseLandmarkManager(
 ) {
     companion object {
         private const val TAG = "PoseLandmarkManager"
-        private const val MAX_ANALYSIS_DIM = 480
+        private const val MAX_ANALYSIS_DIM = 320
         private const val DEFAULT_SMOOTHING_ALPHA = 0.65f
 
         // MediaPipe Pose landmark indices
@@ -185,32 +185,44 @@ class PoseLandmarkManager(
     }
 
     /**
-     * Analyzes a CameraX ImageProxy frame via MediaPipe PoseLandmarker in VIDEO mode.
-     * Normalizes sensor rotation and front-camera mirroring into an upright color Bitmap,
-     * runs temporal pose tracking, smooths landmarks, and computes biomechanical metrics.
+     * Extracts a downscaled, upright, optionally mirrored ARGB_8888 Bitmap copy from [imageProxy]
+     * without mutating its ByteBuffer positions/limits. Returns null if the format is unsupported
+     * or the landmarker is not yet initialized.
      *
-     * The caller (DualStreamAnalyzer) remains responsible for closing [imageProxy]
-     * after SmartSpectra consumes it.
+     * Designed to run quickly on the camera thread so [analyzeBitmap] can run asynchronously
+     * on a dedicated worker without stalling SmartSpectra frame delivery.
      */
     @Synchronized
-    fun analyzeFrame(
+    fun extractUprightBitmap(
         imageProxy: ImageProxy,
         isFrontCamera: Boolean = true
-    ): PoseAnalysisFrame {
+    ): Bitmap? {
+        if (ensureLandmarker() == null) return null
+        if (imageProxy.format != ImageFormat.YUV_420_888) {
+            Log.w(TAG, "Unsupported image format: ${imageProxy.format}")
+            return null
+        }
+        return runCatching {
+            val bitmap = imageProxy.toUprightColorBitmap(
+                rotationDegrees = imageProxy.imageInfo.rotationDegrees,
+                mirrorHorizontally = isFrontCamera
+            )
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }.getOrElse { e ->
+            Log.w(TAG, "Bitmap extraction failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Runs MediaPipe PoseLandmarker in VIDEO mode on a pre-extracted upright [bitmap].
+     */
+    @Synchronized
+    fun analyzeBitmap(bitmap: Bitmap): PoseAnalysisFrame {
         val landmarker = ensureLandmarker()
             ?: return analyzeLandmarks(emptyMap())
 
-        if (imageProxy.format != ImageFormat.YUV_420_888) {
-            Log.w(TAG, "Unsupported image format: ${imageProxy.format}")
-            return analyzeLandmarks(emptyMap())
-        }
-
         return runCatching {
-            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-            val bitmap = imageProxy.toUprightColorBitmap(
-                rotationDegrees = rotationDegrees,
-                mirrorHorizontally = isFrontCamera
-            )
             val mpImage = BitmapImageBuilder(bitmap).build()
             val timestampMs = maxOf(lastVideoTimestampMs + 1L, SystemClock.uptimeMillis())
             lastVideoTimestampMs = timestampMs
@@ -226,8 +238,28 @@ class PoseLandmarkManager(
                 frameHeight = bitmap.height
             )
         }.getOrElse { e ->
-            Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
+            Log.w(TAG, "MediaPipe bitmap analysis failed: ${e.message}")
             analyzeLandmarks(emptyMap())
+        }
+    }
+
+    /**
+     * Analyzes a CameraX ImageProxy frame synchronously via MediaPipe PoseLandmarker in VIDEO mode.
+     *
+     * The caller (DualStreamAnalyzer) remains responsible for closing [imageProxy]
+     * after SmartSpectra consumes it.
+     */
+    @Synchronized
+    fun analyzeFrame(
+        imageProxy: ImageProxy,
+        isFrontCamera: Boolean = true
+    ): PoseAnalysisFrame {
+        val bitmap = extractUprightBitmap(imageProxy, isFrontCamera)
+            ?: return analyzeLandmarks(emptyMap())
+        return try {
+            analyzeBitmap(bitmap)
+        } finally {
+            bitmap.recycle()
         }
     }
 

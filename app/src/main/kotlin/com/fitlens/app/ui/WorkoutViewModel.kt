@@ -46,7 +46,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val TAG = "WorkoutViewModel"
-        private const val MAX_WAVEFORM_SAMPLES = 150
+        private const val MAX_WAVEFORM_SAMPLES = 200
     }
 
     val presageManager = PresageManager()
@@ -137,16 +137,25 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     @Volatile private var lastFaultLogAt: Long = 0L
     @Volatile private var sessionPersisted = false
 
-    private val sdkMetricsObserver = Observer<com.presagetech.smartspectra.proto.MetricsProto.Metrics?> { metrics ->
-        if (metrics == null) return@Observer
+    // Rolling trace buffers for smooth waveform rendering (SmartSpectra emits delta samples)
+    private val pulseTraceBuffer = ArrayDeque<Float>(MAX_WAVEFORM_SAMPLES)
+    private val chestTraceBuffer = ArrayDeque<Float>(MAX_WAVEFORM_SAMPLES)
+    private val abdomenTraceBuffer = ArrayDeque<Float>(MAX_WAVEFORM_SAMPLES)
+
+    private fun appendToTraceBuffer(buffer: ArrayDeque<Float>, newValues: List<Float>) {
+        for (v in newValues) {
+            if (buffer.size >= MAX_WAVEFORM_SAMPLES) buffer.removeFirst()
+            buffer.addLast(v)
+        }
+    }
+
+    private fun handleSdkMetrics(metrics: com.presagetech.smartspectra.proto.MetricsProto.Metrics) {
         var hr = vitalsFlow.value.heartRateBpm
         var hrv = vitalsFlow.value.heartRateVariabilityMs
         var br = vitalsFlow.value.breathingRateBpm
         var confidence = vitalsFlow.value.signalConfidence
         var expression = vitalsFlow.value.facialExpression
-        val pulseTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
-        val chestTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
-        val abdomenTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
+        var hasNewTrace = false
 
         if (metrics.hasCardio()) {
             metrics.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.let {
@@ -154,18 +163,24 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 confidence = it.confidence
             }
             metrics.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.let { hrv = it.rmssd }
-            metrics.cardio.arterialPressureTraceList
-                .takeLast(MAX_WAVEFORM_SAMPLES)
-                .forEach { pulseTrace.add(it.value) }
+            val newPulse = metrics.cardio.arterialPressureTraceList.map { it.value }
+            if (newPulse.isNotEmpty()) {
+                appendToTraceBuffer(pulseTraceBuffer, newPulse)
+                hasNewTrace = true
+            }
         }
         if (metrics.hasBreathing()) {
             metrics.breathing.rateList.lastOrNull()?.let { br = it.value.toDouble() }
-            metrics.breathing.upperTraceList
-                .takeLast(MAX_WAVEFORM_SAMPLES)
-                .forEach { chestTrace.add(it.value) }
-            metrics.breathing.lowerTraceList
-                .takeLast(MAX_WAVEFORM_SAMPLES)
-                .forEach { abdomenTrace.add(it.value) }
+            val newChest = metrics.breathing.upperTraceList.map { it.value }
+            if (newChest.isNotEmpty()) {
+                appendToTraceBuffer(chestTraceBuffer, newChest)
+                hasNewTrace = true
+            }
+            val newAbdomen = metrics.breathing.lowerTraceList.map { it.value }
+            if (newAbdomen.isNotEmpty()) {
+                appendToTraceBuffer(abdomenTraceBuffer, newAbdomen)
+                hasNewTrace = true
+            }
         }
         if (metrics.hasFace()) {
             metrics.face.expressionList.lastOrNull()?.scoresList
@@ -174,15 +189,15 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 ?.let { top -> top.type.toReadableLabel()?.let { expression = it } }
         }
 
-        if (hr > 0.0 || br > 0.0 || pulseTrace.isNotEmpty()) {
+        if (hr > 0.0 || br > 0.0 || hasNewTrace || expression != null) {
             vitalsAnalyzer.updateVitalsReading(
                 hr = hr,
                 hrv = hrv,
                 breathingRate = br,
                 confidence = confidence,
-                pulseTrace = if (pulseTrace.isNotEmpty()) pulseTrace else vitalsFlow.value.arterialPressureTrace,
-                chestTrace = if (chestTrace.isNotEmpty()) chestTrace else vitalsFlow.value.chestBreathingTrace,
-                abdomenTrace = if (abdomenTrace.isNotEmpty()) abdomenTrace else vitalsFlow.value.abdomenBreathingTrace,
+                pulseTrace = pulseTraceBuffer.toList(),
+                chestTrace = chestTraceBuffer.toList(),
+                abdomenTrace = abdomenTraceBuffer.toList(),
                 expression = expression
             )
         }
@@ -213,10 +228,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         val sdk = SmartSpectraSdk.shared
-        sdk.metrics.observeForever(sdkMetricsObserver)
         sdk.insight.observeForever(sdkInsightObserver)
         sdk.error.observeForever(sdkErrorObserver)
         sdk.validationStatus.observeForever(sdkValidationObserver)
+
+        // Collect sdk.metricsFlow so no per-sample trace emissions are dropped under UI load
+        viewModelScope.launch {
+            sdk.metricsFlow.collect { metrics ->
+                handleSdkMetrics(metrics)
+            }
+        }
 
         // Propagate UserProfile, Karvonen thresholds, SDK telemetry opt-out & AI mode
         viewModelScope.launch {
@@ -328,6 +349,13 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     fun prepareVitalsCustomInput() {
         vitalsAnalyzer.ensureCustomInput()
+    }
+
+    fun clearVitalsSession() {
+        pulseTraceBuffer.clear()
+        chestTraceBuffer.clear()
+        abdomenTraceBuffer.clear()
+        vitalsAnalyzer.clearSessionReadings()
     }
 
     fun resetVitalsInput() {
@@ -641,11 +669,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         val sdk = SmartSpectraSdk.shared
-        sdk.metrics.removeObserver(sdkMetricsObserver)
         sdk.insight.removeObserver(sdkInsightObserver)
         sdk.error.removeObserver(sdkErrorObserver)
         sdk.validationStatus.removeObserver(sdkValidationObserver)
         vitalsAnalyzer.resetCustomInput()
+        dualStreamAnalyzer.shutdown()
         poseManager.close()
         audioCoach.shutdown()
         workoutManager.cleanup()
