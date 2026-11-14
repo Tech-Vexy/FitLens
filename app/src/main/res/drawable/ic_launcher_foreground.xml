@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer optical lens ring (safe zone 24..84) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,26 A28,28 0 1,1 53.99,26 Z"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.5">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:endX="82"
+                android:endY="82"
+                android:startX="26"
+                android:startY="26"
+                android:type="linear">
+                <item
+                    android:color="#FF6EE7B7"
+                    android:offset="0" />
+                <item
+                    android:color="#FF4FCCC4"
+                    android:offset="0.5" />
+                <item
+                    android:color="#FFA58CF9"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner lens aperture arc -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,44 A22,22 0 0,1 74,44"
+        android:strokeAlpha="0.45"
+        android:strokeColor="#FFA58CF9"
+        android:strokeLineCap="round"
+        android:strokeWidth="1.8" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M74,64 A22,22 0 0,1 34,64"
+        android:strokeAlpha="0.45"
+        android:strokeColor="#FF6EE7B7"
+        android:strokeLineCap="round"
+        android:strokeWidth="1.8" />
+
+    <!-- Stylized biomechanical pose chevron / athletic peak -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M43,43 L54,34 L65,43"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3" />
+    <path
+        android:fillColor="#FF6EE7B7"
+        android:pathData="M54,34m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+    <path
+        android:fillColor="#FFA58CF9"
+        android:pathData="M43,43m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
+    <path
+        android:fillColor="#FFA58CF9"
+        android:pathData="M65,43m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
+
+    <!-- Live rPPG pulse waveform across the lens center -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,57 L42,57 L46,48 L51,67 L56,43 L60,61 L64,57 L76,57"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3.2">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:endX="76"
+                android:endY="57"
+                android:startX="32"
+                android:startY="57"
+                android:type="linear">
+                <item
+                    android:color="#FF4FCCC4"
+                    android:offset="0" />
+                <item
+                    android:color="#FFFF6B6B"
+                    android:offset="0.52" />
+                <item
+                    android:color="#FF6EE7B7"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

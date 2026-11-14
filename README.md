@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/fitlens_logo.png" alt="FitLens Logo" width="140" />
+</p>
+
 # FitLens — Contactless Human-Sensing AI Fitness & Biomechanics Coach
 
 FitLens is a real-time Android fitness and biomechanics coach built with the **Presage SmartSpectra Android SDK**, **MediaPipe Pose Landmarker**, and **Google ADK Kotlin**. Using a single camera stream without wearables or chest straps, FitLens responds live to **pulse rate**, **breathing rate**, **HRV (RMSSD)**, **facial expressions**, and **33-point 3D joint angles**—adapting rest intervals, pacing recovery breathing, coaching facial tension release, and halting sets before form breakdown causes joint strain.
