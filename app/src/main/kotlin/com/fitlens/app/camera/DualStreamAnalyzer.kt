@@ -9,20 +9,20 @@ import com.fitlens.app.vitals.PresageFrameAnalyzer
 
 /**
  * DualStreamAnalyzer dispatches single CameraX ImageProxy frames simultaneously to:
- * 1. Presage SmartSpectra SDK (useCustomInput rPPG vitals extraction)
- * 2. MediaPipe Pose Landmarker (biomechanical skeletal tracking)
+ * 1. MediaPipe Pose Landmarker (biomechanical skeletal tracking)
+ * 2. Presage SmartSpectra SDK (useCustomInput rPPG vitals extraction)
  *
- * This completely avoids camera device lock contention between the two computer vision libraries.
+ * Ordering contract: MediaPipe runs FIRST on each ImageProxy (using duplicated read-only
+ * ByteBuffers) because [PresageFrameAnalyzer.analyze] closes the proxy in its finally block.
  *
- * Ordering contract: MediaPipe runs FIRST on each ImageProxy because
- * [PresageFrameAnalyzer.analyze] always closes the proxy when it returns (required by the
- * SmartSpectra SDK contract). The resulting [PoseAnalysisFrame] is delivered to
- * [onPoseFrame] so the workout pipeline can consume rep counts, form deviations, and landmarks.
+ * [enablePoseAnalysis] and [isFrontCamera] can be toggled dynamically at runtime so a
+ * single shared pipeline serves both vitals-only screens and full workout screens.
  */
 class DualStreamAnalyzer(
     private val presageAnalyzer: PresageFrameAnalyzer,
     private val poseManager: PoseLandmarkManager,
-    private val enablePoseAnalysis: Boolean = true,
+    @Volatile var enablePoseAnalysis: Boolean = true,
+    @Volatile var isFrontCamera: Boolean = true,
     private val onPoseFrame: ((PoseAnalysisFrame) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
 
@@ -31,17 +31,18 @@ class DualStreamAnalyzer(
     }
 
     override fun analyze(imageProxy: ImageProxy) {
-        // 1. MediaPipe Pose Landmarker (biomechanics) — must run before the proxy is closed.
         if (enablePoseAnalysis) {
             try {
-                val analysisFrame = poseManager.analyzeFrame(imageProxy)
+                val analysisFrame = poseManager.analyzeFrame(
+                    imageProxy = imageProxy,
+                    isFrontCamera = isFrontCamera
+                )
                 onPoseFrame?.invoke(analysisFrame)
             } catch (e: Exception) {
                 Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
             }
         }
 
-        // 2. SmartSpectra custom-input (vitals) — closes imageProxy in its finally block.
         try {
             presageAnalyzer.analyze(imageProxy)
         } catch (e: Exception) {

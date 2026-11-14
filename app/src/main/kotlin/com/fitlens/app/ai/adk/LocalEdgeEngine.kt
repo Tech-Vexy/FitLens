@@ -1,6 +1,7 @@
 package com.fitlens.app.ai.adk
 
 import android.util.Log
+import com.fitlens.app.ai.BiofeedbackCoachingResult
 import com.fitlens.app.ai.FatigueCheckResult
 import com.fitlens.app.ai.MesocyclePlanResult
 import com.fitlens.app.ai.RestAdjustmentResult
@@ -12,36 +13,20 @@ import java.lang.reflect.Method
  * LocalEdgeEngine is the deterministic on-device inference backend for
  * [AdkAuthMode.ON_DEVICE_EDGE].
  *
- * It replaces the previous placeholder response with a real (network-free)
- * tool-routing layer that mirrors how an ADK agent dispatches to @Tool
- * functions:
- *
- *  1. Discovers every method annotated with [Tool] on the agent's tool objects.
- *  2. Scores each tool by keyword overlap between the camelCase method name
- *     (plus domain synonyms) and the normalized prompt.
- *  3. Extracts arguments from the prompt — numbers are matched to parameters
- *     by semantic keyword proximity, strings via domain keyword dictionaries.
- *  4. Invokes the best-scoring tool via reflection and formats the typed
- *     result into a coaching response.
- *
  * Everything runs locally with zero network access and zero model downloads,
- * which keeps sub-10ms safety-path latency for fatigue checks during a set.
+ * keeping sub-10ms safety-path latency during live sets.
  */
 class LocalEdgeEngine {
 
     companion object {
         private const val TAG = "LocalEdgeEngine"
-
-        /** Max char distance between a keyword hit and a number for them to pair. */
         private const val MAX_KEYWORD_DISTANCE = 48
 
-        /** Generic tokens that carry no intent signal when matching tool names. */
         private val STOP_TOKENS = setOf(
             "generate", "calculate", "evaluate", "analyze", "request", "check",
             "get", "with", "from", "the", "for", "and", "result"
         )
 
-        /** Domain synonyms appended to the normalized prompt before scoring. */
         private val SYNONYMS: Map<String, String> = mapOf(
             "recovery" to "rest",
             "fatigue" to "deviation form breakdown",
@@ -49,35 +34,37 @@ class LocalEdgeEngine {
             "routine" to "plan workout",
             "periodization" to "mesocycle week phase",
             "conditioning" to "endurance cardio",
-            "soreness" to "recovery rest"
+            "soreness" to "recovery rest",
+            "breathing" to "biofeedback holistic",
+            "expression" to "biofeedback holistic",
+            "hrv" to "biofeedback holistic"
         )
 
-        /**
-         * Fallback parameter names keyed by method name, used only when the
-         * Kotlin compiler did not emit Java parameter names
-         * (i.e. -java-parameters is off). Mirrors FitnessTools signatures.
-         */
         private val FALLBACK_PARAM_NAMES: Map<String, List<String>> = mapOf(
             "generateWorkoutPlan" to listOf("goal", "experience", "equipment", "durationMinutes"),
             "analyzeSession" to listOf("sessionDurationSeconds", "averageHeartRateBpm", "formDeviations"),
             "calculateAdaptiveRest" to listOf("baseRestSeconds", "currentHeartRateBpm", "restingHeartRateBpm"),
             "evaluateBiomechanicalFatigue" to listOf("consecutiveDeviations", "currentSetRepsCompleted", "targetReps"),
-            "generateMesocyclePeriodization" to listOf("goal", "weeksCount", "daysPerWeek")
+            "generateMesocyclePeriodization" to listOf("goal", "weeksCount", "daysPerWeek"),
+            "evaluateHolisticBiofeedback" to listOf("heartRateBpm", "breathingRateBpm", "hrvRmssdMs", "facialExpression")
         )
 
-        /** Defaults for Kotlin default parameters, which Java reflection can't see. */
         private val OPTIONAL_PARAM_DEFAULTS: Map<String, Any> = mapOf(
             "restingHeartRateBpm" to 70.0,
             "weeksCount" to 4,
-            "daysPerWeek" to 3
+            "daysPerWeek" to 3,
+            "hrvRmssdMs" to 45.0,
+            "facialExpression" to "Neutral"
         )
 
-        /** Keywords used to locate the numeric argument for a parameter. */
         private val PARAM_KEYWORDS: Map<String, List<String>> = mapOf(
             "heartRate" to listOf("heart rate", "hr", "bpm", "pulse"),
+            "heartRateBpm" to listOf("heart rate", "hr", "bpm", "pulse"),
             "currentHeartRateBpm" to listOf("heart rate", "hr", "bpm", "pulse"),
             "averageHeartRateBpm" to listOf("heart rate", "hr", "bpm", "pulse"),
             "restingHeartRateBpm" to listOf("resting heart rate", "resting", "rhr"),
+            "breathingRateBpm" to listOf("breathing", "brpm", "respiratory", "breath"),
+            "hrvRmssdMs" to listOf("hrv", "rmssd", "ms"),
             "sessionDurationSeconds" to listOf("duration", "seconds", "elapsed"),
             "durationMinutes" to listOf("duration", "minutes", "minute", "min"),
             "baseRestSeconds" to listOf("rest"),
@@ -89,11 +76,11 @@ class LocalEdgeEngine {
             "daysPerWeek" to listOf("days per week", "days", "day")
         )
 
-        /** Name fragments worth using as keywords when no explicit entry exists. */
         private val GENERIC_KEYWORD_TOKENS = setOf(
             "heart", "rate", "bpm", "pulse", "rep", "reps", "set", "sets",
             "week", "weeks", "day", "days", "duration", "rest", "deviation",
-            "deviations", "form", "second", "seconds", "minute", "minutes"
+            "deviations", "form", "second", "seconds", "minute", "minutes",
+            "breathing", "hrv", "expression"
         )
 
         private val NUMBER_REGEX = Regex("""-?\d+(?:\.\d+)?""")
@@ -114,11 +101,6 @@ class LocalEdgeEngine {
         val score: Int
     )
 
-    /**
-     * Routes [prompt] to the best-matching @Tool method on [toolObjects]
-     * and returns a human-readable coaching response. Falls back to a
-     * capability summary when no tool matches or invocation fails.
-     */
     fun generate(toolObjects: List<Any>, prompt: String): String {
         val normalizedPrompt = prompt.lowercase()
         val expandedPrompt = expandWithSynonyms(normalizedPrompt)
@@ -144,10 +126,6 @@ class LocalEdgeEngine {
 
         return fallbackResponse()
     }
-
-    // ------------------------------------------------------------------
-    // Tool discovery & scoring
-    // ------------------------------------------------------------------
 
     private fun discoverTools(toolObjects: List<Any>): List<Triple<Method, Any, List<ParamSpec>>> =
         toolObjects.flatMap { owner ->
@@ -181,14 +159,6 @@ class LocalEdgeEngine {
             .filter { it.length >= 4 && it !in STOP_TOKENS }
             .count { token -> expandedPrompt.contains(token) }
 
-    // ------------------------------------------------------------------
-    // Argument extraction
-    // ------------------------------------------------------------------
-
-    /**
-     * Resolves a value for every parameter, or returns null if a required
-     * (non-optional) parameter cannot be extracted.
-     */
     private fun resolveArguments(
         params: List<ParamSpec>,
         rawPrompt: String,
@@ -225,10 +195,6 @@ class LocalEdgeEngine {
         else -> value
     }
 
-    /**
-     * Picks the number closest to a semantic keyword occurrence in the prompt;
-     * falls back to the first unused number, then to null.
-     */
     private fun extractNumberArg(
         paramName: String,
         normalizedPrompt: String,
@@ -278,9 +244,10 @@ class LocalEdgeEngine {
             .ifEmpty { listOf(paramName.lowercase()) }
 
     private fun extractStringArg(paramName: String, prompt: String): String? = when {
-        paramName.contains("goal", ignoreCase = true) -> extractGoal(prompt)
-        paramName.contains("experience", ignoreCase = true) -> extractExperience(prompt)
-        paramName.contains("equipment", ignoreCase = true) -> extractEquipment(prompt)
+        paramName.contains("goal", ignoreCase = true) -> extractGoal(prompt.lowercase())
+        paramName.contains("experience", ignoreCase = true) -> extractExperience(prompt.lowercase())
+        paramName.contains("equipment", ignoreCase = true) -> extractEquipment(prompt.lowercase())
+        paramName.contains("expression", ignoreCase = true) -> extractExpression(prompt.lowercase())
         paramName.contains("exercise", ignoreCase = true) -> extractExercise(prompt)
         else -> null
     }
@@ -308,15 +275,19 @@ class LocalEdgeEngine {
         else -> "Bodyweight"
     }
 
+    private fun extractExpression(prompt: String): String = when {
+        prompt.contains("strain") || prompt.contains("grimace") -> "Strain"
+        prompt.contains("angry") -> "Angry"
+        prompt.contains("happy") || prompt.contains("smile") -> "Happy"
+        prompt.contains("fear") -> "Fear"
+        else -> "Neutral"
+    }
+
     private fun extractExercise(prompt: String): String? {
         val match = Regex("""(?:for|of|exercise[:\s]+)([a-zA-Z][a-zA-Z\- ]{2,30})""")
             .find(prompt) ?: return null
         return match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
     }
-
-    // ------------------------------------------------------------------
-    // Response formatting
-    // ------------------------------------------------------------------
 
     private fun formatResult(result: Any): String = when (result) {
         is WorkoutPlanResult -> buildString {
@@ -341,12 +312,15 @@ class LocalEdgeEngine {
             append("${result.totalWeeks}-week mesocycle (${result.goal}, ${result.daysPerWeek} days/week): ")
             append(result.phases.joinToString("; ") { "W${it.weekNumber} ${it.phaseName}" })
         }
+        is BiofeedbackCoachingResult -> buildString {
+            append(result.breathingDirective).append(" [").append(result.autonomicReadinessLabel).append(']')
+            result.expressionCue?.let { append(' ').append(it) }
+        }
         else -> result.toString()
     }
 
     private fun fallbackResponse(): String =
         "[On-Device Edge] Offline coach. I can generate workout plans, evaluate " +
-            "sessions, adapt rest from heart rate, and check biomechanical fatigue " +
-            "locally — e.g. \"generate a hypertrophy workout plan\", \"evaluate " +
-            "biomechanical fatigue\", or \"calculate adaptive rest\"."
+            "sessions, adapt rest from heart rate, synthesize multi-signal biofeedback, " +
+            "and check biomechanical fatigue locally."
 }

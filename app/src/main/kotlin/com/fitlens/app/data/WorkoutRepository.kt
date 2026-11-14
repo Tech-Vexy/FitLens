@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 class WorkoutRepository(private val workoutDao: WorkoutDao) {
 
     val allSessions: Flow<List<WorkoutSessionEntity>> = workoutDao.getAllSessions()
+    val allFaults: Flow<List<BiomechanicalFaultEntity>> = workoutDao.getAllFaults()
 
     suspend fun saveSession(session: WorkoutSessionEntity): Long {
         return workoutDao.insertSession(session)
@@ -50,5 +51,15 @@ class WorkoutRepository(private val workoutDao: WorkoutDao) {
 
     suspend fun getSessionFaults(sessionId: Long): List<BiomechanicalFaultEntity> {
         return workoutDao.getFaultsForSession(sessionId)
+    }
+
+    /**
+     * Permanently deletes all local workout sessions, vitals logs, and biomechanical faults.
+     * Supports user data deletion rights under GDPR / health data privacy standards.
+     */
+    suspend fun deleteAllLocalHealthData() {
+        workoutDao.clearAllLocalVitals()
+        workoutDao.clearAllLocalFaults()
+        workoutDao.clearAllSessions()
     }
 }

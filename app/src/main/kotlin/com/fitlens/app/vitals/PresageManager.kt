@@ -21,6 +21,15 @@ class PresageManager {
 
     companion object {
         private const val TAG = "PresageManager"
+        const val PLACEHOLDER_KEY = "PLACEHOLDER_RUN_SETUP"
+    }
+
+    /**
+     * Returns true when secrets.properties has not been configured with a live Presage key.
+     */
+    fun isPlaceholderKey(): Boolean {
+        val key = BuildConfig.PRESAGE_API_KEY
+        return key.isBlank() || key == PLACEHOLDER_KEY
     }
 
     /**
@@ -29,7 +38,7 @@ class PresageManager {
      */
     fun getApiKey(): String {
         val key = BuildConfig.PRESAGE_API_KEY
-        if (key.isBlank() || key == "PLACEHOLDER_RUN_SETUP") {
+        if (isPlaceholderKey()) {
             Log.w(TAG, "PRESAGE_API_KEY is placeholder — set a real key in secrets.properties.")
         } else {
             Log.d(TAG, "PRESAGE_API_KEY resolved (${key.take(4)}…${key.takeLast(4)}).")
@@ -38,23 +47,22 @@ class PresageManager {
     }
 
     /**
-     * Configures SmartSpectraSdk.shared with the API key and requested metrics.
-     * Call this once, before sdk.start() or sdk.useCustomInput(), typically from
-     * Application.onCreate() or the Activity's onCreate().
-     *
-     * The SDK stores singleton state; calling this again simply refreshes config values.
+     * Configures SmartSpectraSdk.shared with the API key, telemetry preference, and metrics.
      *
      * Note: We use the custom input (headless) mode — the SDK's built-in camera is NOT
      * used. CameraX provides the preview and ImageAnalysis, and frames are forwarded
      * to SmartSpectra via useCustomInput(). This avoids camera device lock contention
      * between SmartSpectra and MediaPipe.
      */
-    fun initializeSdk() {
+    fun initializeSdk(enableTelemetry: Boolean = true) {
         val sdk = SmartSpectraSdk.shared
         sdk.config.apiKey = getApiKey()
 
         // Disable raw bitmap output — we render the CameraX PreviewView directly
         sdk.config.imageOutputEnabled = false
+
+        // Respect user's opt-out preference for aggregate diagnostic SDK telemetry
+        sdk.config.enableTelemetry = enableTelemetry
 
         // Request the full cardio + breathing + expression metric bundle
         sdk.config.requestedMetrics =
@@ -62,6 +70,21 @@ class PresageManager {
             SmartSpectraConfig.breathingMetrics +
             listOf(MetricType.EXPRESSIONS)
 
-        Log.i(TAG, "SmartSpectraSdk initialized (cardio + breathing + expressions, custom input mode).")
+        Log.i(
+            TAG,
+            "SmartSpectraSdk initialized (v${sdk.version}, cardio + breathing + expressions, telemetry=$enableTelemetry)."
+        )
+    }
+
+    /**
+     * Updates SmartSpectra aggregate diagnostic telemetry opt-out setting at runtime.
+     */
+    fun setTelemetryEnabled(enabled: Boolean) {
+        runCatching {
+            SmartSpectraSdk.shared.config.enableTelemetry = enabled
+            Log.i(TAG, "SmartSpectra diagnostic telemetry updated: enabled=$enabled")
+        }.onFailure { e ->
+            Log.w(TAG, "Unable to update SmartSpectra telemetry flag: ${e.message}")
+        }
     }
 }

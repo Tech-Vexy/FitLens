@@ -1,43 +1,55 @@
 package com.fitlens.app.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Observer
 import androidx.lifecycle.viewModelScope
 import com.fitlens.app.ai.FitnessCoachAgent
+import com.fitlens.app.ai.MesocyclePlanResult
+import com.fitlens.app.ai.WorkoutPlanResult
+import com.fitlens.app.ai.adk.AdkAuthMode
 import com.fitlens.app.audio.FitLensAudioCoach
 import com.fitlens.app.camera.DualStreamAnalyzer
 import com.fitlens.app.data.WorkoutDatabase
 import com.fitlens.app.data.WorkoutRepository
+import com.fitlens.app.data.model.BiomechanicalFaultEntity
+import com.fitlens.app.data.model.VitalsLogEntity
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserPreferencesRepository
+import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.pose.DeviationSeverity
 import com.fitlens.app.pose.LandmarkPoint
 import com.fitlens.app.pose.PoseAnalysisFrame
 import com.fitlens.app.pose.PoseLandmarkManager
+import com.fitlens.app.testing.HeadlessVideoFeeder
+import com.fitlens.app.testing.SmokeTestGateResult
 import com.fitlens.app.vitals.PresageFrameAnalyzer
+import com.fitlens.app.vitals.PresageManager
 import com.fitlens.app.workout.ProgressAnalyzer
 import com.fitlens.app.workout.ProgressionInsight
 import com.fitlens.app.workout.WorkoutManager
 import com.fitlens.app.workout.WorkoutPhase
 import com.fitlens.app.workout.WorkoutState
 import com.presagetech.smartspectra.SmartSpectraSdk
+import com.presagetech.smartspectra.proto.InsightsProto
+import com.presagetech.smartspectra.proto.MetricsProto.ExpressionType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
+import java.util.concurrent.CopyOnWriteArrayList
 
 class WorkoutViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
-        // The SDK emits a cumulative arterial-pressure trace; cap what we retain
-        // per reading so memory and waveform redraw cost stay bounded per session.
-        private const val MAX_WAVEFORM_SAMPLES = 120
+        private const val TAG = "WorkoutViewModel"
+        private const val MAX_WAVEFORM_SAMPLES = 150
     }
 
+    val presageManager = PresageManager()
     private val coachAgent = FitnessCoachAgent()
     private val poseManager = PoseLandmarkManager(application)
     private val vitalsAnalyzer = PresageFrameAnalyzer()
@@ -45,10 +57,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val progressAnalyzer = ProgressAnalyzer()
     private val audioCoach = FitLensAudioCoach(application)
     private val userPrefsRepo = UserPreferencesRepository(application)
+    private val headlessFeeder = HeadlessVideoFeeder(vitalsAnalyzer, poseManager)
 
+    /**
+     * Single shared CameraX analyzer used by both the Vitals Dashboard (enablePoseAnalysis=false)
+     * and the Live Workout HUD (enablePoseAnalysis=true).
+     */
     val dualStreamAnalyzer = DualStreamAnalyzer(
         presageAnalyzer = vitalsAnalyzer,
         poseManager = poseManager,
+        enablePoseAnalysis = false,
         onPoseFrame = { frame -> onCameraPoseFrame(frame) }
     )
 
@@ -60,13 +78,28 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     val workoutState: StateFlow<WorkoutState> = workoutManager.state
     val vitalsFlow = vitalsAnalyzer.vitalsFlow
 
+    val userProfile: StateFlow<UserProfile> = userPrefsRepo.userProfileFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = UserProfile()
+    )
+
     private val _isAudioMuted = MutableStateFlow(false)
     val isAudioMuted: StateFlow<Boolean> = _isAudioMuted.asStateFlow()
 
     private val _currentLandmarks = MutableStateFlow<Map<Int, LandmarkPoint>>(emptyMap())
     val currentLandmarks: StateFlow<Map<Int, LandmarkPoint>> = _currentLandmarks.asStateFlow()
 
+    private val _poseFrameSize = MutableStateFlow(0 to 0)
+    val poseFrameSize: StateFlow<Pair<Int, Int>> = _poseFrameSize.asStateFlow()
+
     val workoutHistory: StateFlow<List<WorkoutSessionEntity>> = repository.allSessions.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val allBiomechanicalFaults: StateFlow<List<BiomechanicalFaultEntity>> = repository.allFaults.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -78,30 +111,42 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _lastSavedSession = MutableStateFlow<WorkoutSessionEntity?>(null)
     val lastSavedSession: StateFlow<WorkoutSessionEntity?> = _lastSavedSession.asStateFlow()
 
+    private val _generatedPlan = MutableStateFlow<WorkoutPlanResult?>(null)
+    val generatedPlan: StateFlow<WorkoutPlanResult?> = _generatedPlan.asStateFlow()
+
+    private val _generatedMesocycle = MutableStateFlow<MesocyclePlanResult?>(null)
+    val generatedMesocycle: StateFlow<MesocyclePlanResult?> = _generatedMesocycle.asStateFlow()
+
+    private val _isGeneratingAiPlan = MutableStateFlow(false)
+    val isGeneratingAiPlan: StateFlow<Boolean> = _isGeneratingAiPlan.asStateFlow()
+
+    private val _smokeTestResult = MutableStateFlow<SmokeTestGateResult?>(null)
+    val smokeTestResult: StateFlow<SmokeTestGateResult?> = _smokeTestResult.asStateFlow()
+
+    private val _isRunningSmokeTest = MutableStateFlow(false)
+    val isRunningSmokeTest: StateFlow<Boolean> = _isRunningSmokeTest.asStateFlow()
+
     private var previousRepCount = 0
     private var previousPhase = WorkoutPhase.IDLE
 
-    // Active session local buffer for SQLite persistence
-    private val activeVitalsBuffer = mutableListOf<com.fitlens.app.data.model.VitalsLogEntity>()
-    // Written from the CameraX analyzer thread; CopyOnWriteArrayList keeps iteration safe.
-    private val activeFaultsBuffer = java.util.concurrent.CopyOnWriteArrayList<com.fitlens.app.data.model.BiomechanicalFaultEntity>()
+    // Thread-safe active session buffers for local SQLite persistence
+    private val activeVitalsBuffer = CopyOnWriteArrayList<VitalsLogEntity>()
+    private val activeFaultsBuffer = CopyOnWriteArrayList<BiomechanicalFaultEntity>()
 
-    // Fault-logging dedupe state (camera analyzer thread)
     @Volatile private var lastFaultSignature: String? = null
     @Volatile private var lastFaultLogAt: Long = 0L
-
-    // Guards against persisting the same workout twice (manual finish racing
-    // the auto-completion path). Reset on every startWorkout().
     @Volatile private var sessionPersisted = false
 
-    // Observers kept for cleanup in onCleared (ViewModel has no LifecycleOwner)
     private val sdkMetricsObserver = Observer<com.presagetech.smartspectra.proto.MetricsProto.Metrics?> { metrics ->
         if (metrics == null) return@Observer
-        var hr = 0.0
-        var hrv = 0.0
-        var br = 0.0
-        var confidence = 0f
-        val trace = mutableListOf<Float>()
+        var hr = vitalsFlow.value.heartRateBpm
+        var hrv = vitalsFlow.value.heartRateVariabilityMs
+        var br = vitalsFlow.value.breathingRateBpm
+        var confidence = vitalsFlow.value.signalConfidence
+        var expression = vitalsFlow.value.facialExpression
+        val pulseTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
+        val chestTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
+        val abdomenTrace = ArrayList<Float>(MAX_WAVEFORM_SAMPLES)
 
         if (metrics.hasCardio()) {
             metrics.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.let {
@@ -109,54 +154,80 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 confidence = it.confidence
             }
             metrics.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.let { hrv = it.rmssd }
-            // Keep only the newest window — the proto trace is cumulative, so
-            // copying it wholesale on every emission would grow O(n²) per session.
             metrics.cardio.arterialPressureTraceList
                 .takeLast(MAX_WAVEFORM_SAMPLES)
-                .forEach { trace.add(it.value) }
+                .forEach { pulseTrace.add(it.value) }
         }
         if (metrics.hasBreathing()) {
             metrics.breathing.rateList.lastOrNull()?.let { br = it.value.toDouble() }
+            metrics.breathing.upperTraceList
+                .takeLast(MAX_WAVEFORM_SAMPLES)
+                .forEach { chestTrace.add(it.value) }
+            metrics.breathing.lowerTraceList
+                .takeLast(MAX_WAVEFORM_SAMPLES)
+                .forEach { abdomenTrace.add(it.value) }
         }
-        if (hr > 0) {
+        if (metrics.hasFace()) {
+            metrics.face.expressionList.lastOrNull()?.scoresList
+                ?.filter { it.confidence > 0f }
+                ?.maxByOrNull { it.confidence }
+                ?.let { top -> top.type.toReadableLabel()?.let { expression = it } }
+        }
+
+        if (hr > 0.0 || br > 0.0 || pulseTrace.isNotEmpty()) {
             vitalsAnalyzer.updateVitalsReading(
                 hr = hr,
                 hrv = hrv,
                 breathingRate = br,
                 confidence = confidence,
-                pulseTrace = trace
+                pulseTrace = if (pulseTrace.isNotEmpty()) pulseTrace else vitalsFlow.value.arterialPressureTrace,
+                chestTrace = if (chestTrace.isNotEmpty()) chestTrace else vitalsFlow.value.chestBreathingTrace,
+                abdomenTrace = if (abdomenTrace.isNotEmpty()) abdomenTrace else vitalsFlow.value.abdomenBreathingTrace,
+                expression = expression
             )
+        }
+    }
+
+    private val sdkInsightObserver = Observer<InsightsProto.Insight?> { insight ->
+        if (insight == null) return@Observer
+        if (insight.hasAnalysis() && insight.analysis.isNotBlank()) {
+            vitalsAnalyzer.updateSmartSpectraInsight(insight.analysis)
+        } else if (insight.hasError() && insight.error.isNotBlank()) {
+            Log.w(TAG, "SmartSpectra insight warning: ${insight.error}")
         }
     }
 
     private val sdkErrorObserver = Observer<com.presagetech.smartspectra.SmartSpectraError?> { error ->
         if (error != null) {
-            android.util.Log.e("WorkoutViewModel", "SmartSpectra SDK error: ${error.message}")
+            Log.e(TAG, "SmartSpectra SDK error: ${error.message}")
         }
     }
 
     private val sdkValidationObserver = Observer<com.presagetech.smartspectra.ValidationStatus?> { status ->
-        status?.hint?.let { hint ->
-            if (!hint.isNullOrEmpty()) {
-                android.util.Log.d("WorkoutViewModel", "SmartSpectra validation: $hint")
-            }
+        val hint = status?.hint.orEmpty()
+        vitalsAnalyzer.updateValidationHint(hint)
+        if (hint.isNotEmpty()) {
+            Log.d(TAG, "SmartSpectra validation: $hint")
         }
     }
 
     init {
         val sdk = SmartSpectraSdk.shared
-        // Wire SmartSpectraSdk.shared LiveData streams → vitalsAnalyzer → vitalsFlow
-        // observeForever is appropriate here because ViewModel has no LifecycleOwner;
-        // the observers are removed manually in onCleared().
         sdk.metrics.observeForever(sdkMetricsObserver)
+        sdk.insight.observeForever(sdkInsightObserver)
         sdk.error.observeForever(sdkErrorObserver)
         sdk.validationStatus.observeForever(sdkValidationObserver)
 
-        // Push UserProfile updates from DataStore into PresageFrameAnalyzer so that
-        // heart rate zone classification always uses the personalized Karvonen model.
+        // Propagate UserProfile, Karvonen thresholds, SDK telemetry opt-out & AI mode
         viewModelScope.launch {
             userPrefsRepo.userProfileFlow.collect { profile ->
                 vitalsAnalyzer.updateUserProfile(profile)
+                workoutManager.updateRestingHeartRate(profile.restingHeartRate)
+                presageManager.setTelemetryEnabled(profile.smartSpectraTelemetryEnabled)
+                coachAgent.setAuthMode(
+                    if (profile.preferLocalEdgeAi) AdkAuthMode.ON_DEVICE_EDGE
+                    else AdkAuthMode.FIREBASE_AI_LOGIC
+                )
             }
         }
 
@@ -164,11 +235,15 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             vitalsFlow.collect { vitals ->
                 workoutManager.onVitalsReading(vitals)
-                if (workoutManager.state.value.phase == WorkoutPhase.ACTIVE_SET || workoutManager.state.value.phase == WorkoutPhase.REST_INTERVAL) {
+                val phase = workoutManager.state.value.phase
+                if (phase == WorkoutPhase.ACTIVE_SET ||
+                    phase == WorkoutPhase.REST_INTERVAL ||
+                    phase == WorkoutPhase.COOLDOWN
+                ) {
                     if (vitals.heartRateBpm > 40.0) {
                         activeVitalsBuffer.add(
-                            com.fitlens.app.data.model.VitalsLogEntity(
-                                sessionId = 0L, // updated upon session completion
+                            VitalsLogEntity(
+                                sessionId = 0L,
                                 timestampMs = vitals.timestampMs,
                                 heartRateBpm = vitals.heartRateBpm,
                                 heartRateVariabilityMs = vitals.heartRateVariabilityMs,
@@ -182,28 +257,39 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // Periodically refresh insights when history updates
         viewModelScope.launch {
             workoutHistory.collect { sessions ->
                 _latestInsight.value = progressAnalyzer.analyzeProgression(sessions)
             }
         }
 
-        // Audio coaching triggers on state changes
+        // Hands-free audio coaching triggers on state transitions
         viewModelScope.launch {
             workoutState.collect { state ->
-                // Voice rep counter
-                if (state.completedReps > previousRepCount && state.phase == WorkoutPhase.ACTIVE_SET) {
+                if (!state.isIsometricHold &&
+                    state.completedReps > previousRepCount &&
+                    state.phase == WorkoutPhase.ACTIVE_SET
+                ) {
                     audioCoach.speakRepCount(state.completedReps)
+                    previousRepCount = state.completedReps
+                } else if (state.isIsometricHold &&
+                    state.completedReps > 0 &&
+                    state.completedReps != previousRepCount &&
+                    state.completedReps % 10 == 0 &&
+                    state.phase == WorkoutPhase.ACTIVE_SET
+                ) {
+                    audioCoach.speakCorrection("${state.completedReps} seconds held. Keep core braced.")
                     previousRepCount = state.completedReps
                 }
 
-                // Voice phase transitions
                 if (state.phase != previousPhase) {
                     when (state.phase) {
+                        WorkoutPhase.WARMUP -> {
+                            audioCoach.announcePhase("Dynamic warmup started. Breathe steadily.")
+                        }
                         WorkoutPhase.REST_INTERVAL -> {
                             val msg = if (state.isRestExtended) {
-                                "Set complete. Heart rate elevated, resting for ${state.restSecondsRemaining} seconds."
+                                "Set complete. Heart rate elevated, resting for ${state.restSecondsRemaining} seconds. Follow the breathing ring."
                             } else {
                                 "Set complete. Rest for ${state.restSecondsRemaining} seconds."
                             }
@@ -211,7 +297,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                         }
                         WorkoutPhase.ACTIVE_SET -> {
                             previousRepCount = 0
-                            audioCoach.announcePhase("Begin Set ${state.currentSet}. Focus on form.")
+                            audioCoach.announcePhase("Begin ${state.exerciseName}, Set ${state.currentSet}. Focus on form.")
+                        }
+                        WorkoutPhase.COOLDOWN -> {
+                            audioCoach.announcePhase("Final set complete! Entering recovery breathing cooldown.")
                         }
                         WorkoutPhase.COMPLETED -> {
                             audioCoach.announcePhase("Workout complete! Great effort.")
@@ -221,7 +310,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     previousPhase = state.phase
                 }
 
-                // Voice real-time form alert
                 state.activeCoachAlert?.let { alert ->
                     if (alert.startsWith("⚠️") || alert.contains("caving") || alert.contains("sagging")) {
                         audioCoach.speakCorrection(alert, isUrgent = true)
@@ -231,35 +319,119 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Drops the cached SmartSpectra CustomInput handle. Call before starting a
-     * new SDK session so the next frames get a fresh handle for the new pipeline.
-     */
+    fun setPoseAnalysisEnabled(enabled: Boolean) {
+        dualStreamAnalyzer.enablePoseAnalysis = enabled
+        if (!enabled) {
+            _currentLandmarks.value = emptyMap()
+        }
+    }
+
+    fun prepareVitalsCustomInput() {
+        vitalsAnalyzer.ensureCustomInput()
+    }
+
     fun resetVitalsInput() {
         vitalsAnalyzer.resetCustomInput()
     }
 
-    /**
-     * Toggles audio coaching mute state and propagates it to FitLensAudioCoach.
-     * Called from WorkoutSessionScreen's mute button so the UI and TTS stay in sync.
-     */
+    fun requestSmartSpectraInsight() {
+        val prompt = "Summarize current pulse, breathing cadence, and autonomic recovery readiness in one friendly wellness coaching sentence (non-medical)."
+        val reqId = runCatching {
+            SmartSpectraSdk.shared.requestInsight(prompt)
+        }.getOrDefault(-1)
+
+        if (reqId <= 0 || vitalsFlow.value.smartSpectraLlmInsight.isNullOrBlank()) {
+            val v = vitalsFlow.value
+            val bio = coachAgent.evaluateBiofeedback(
+                heartRateBpm = v.heartRateBpm,
+                breathingRateBpm = v.breathingRateBpm,
+                hrvRmssdMs = v.heartRateVariabilityMs,
+                facialExpression = v.facialExpression
+            )
+            vitalsAnalyzer.updateSmartSpectraInsight(
+                "${bio.autonomicReadinessLabel} • ${bio.breathingDirective}"
+            )
+        }
+    }
+
     fun toggleAudioMute() {
         val newMuted = !_isAudioMuted.value
         _isAudioMuted.value = newMuted
         audioCoach.setMuted(newMuted)
     }
 
-    /**
-     * Handles each PoseAnalysisFrame emitted by the CameraX analyzer thread:
-     * feeds the workout state machine, updates the skeleton overlay landmarks,
-     * and buffers critical faults for local SQLite persistence.
-     */
+    fun updateUserProfile(updated: UserProfile) {
+        viewModelScope.launch {
+            userPrefsRepo.updateProfile(updated)
+        }
+    }
+
+    fun acceptSensingConsent(telemetryEnabled: Boolean, preferLocalEdgeAi: Boolean) {
+        viewModelScope.launch {
+            val current = userProfile.value
+            userPrefsRepo.updateProfile(
+                current.copy(
+                    hasAcceptedSensingConsent = true,
+                    smartSpectraTelemetryEnabled = telemetryEnabled,
+                    preferLocalEdgeAi = preferLocalEdgeAi
+                )
+            )
+        }
+    }
+
+    fun deleteAllLocalData() {
+        viewModelScope.launch {
+            repository.deleteAllLocalHealthData()
+            activeVitalsBuffer.clear()
+            activeFaultsBuffer.clear()
+            _lastSavedSession.value = null
+        }
+    }
+
+    fun generateAiPlanAndMesocycle(
+        goal: String,
+        experience: String,
+        equipment: String,
+        durationMinutes: Int
+    ) {
+        viewModelScope.launch {
+            _isGeneratingAiPlan.value = true
+            runCatching {
+                val plan = coachAgent.requestWorkoutPlan(
+                    goal = goal,
+                    experience = experience,
+                    equipment = equipment,
+                    durationMinutes = durationMinutes
+                )
+                val mesocycle = coachAgent.requestMesocyclePlan(
+                    goal = goal,
+                    weeks = 4,
+                    frequencyPerWeek = if (durationMinutes >= 40) 4 else 3
+                )
+                _generatedPlan.value = plan
+                _generatedMesocycle.value = mesocycle
+            }.onFailure { e ->
+                Log.w(TAG, "AI plan generation failed: ${e.message}")
+            }
+            _isGeneratingAiPlan.value = false
+        }
+    }
+
+    fun runSmokeTest() {
+        viewModelScope.launch {
+            _isRunningSmokeTest.value = true
+            _smokeTestResult.value = headlessFeeder.runSmokeTest(totalFrames = 20, frameIntervalMs = 20L)
+            _isRunningSmokeTest.value = false
+        }
+    }
+
     private fun onCameraPoseFrame(frame: PoseAnalysisFrame) {
-        // Capture phase before onPoseFrame() — it may transition the workout
-        // (e.g. set completion) within this same call.
         val wasActiveSet = workoutManager.state.value.phase == WorkoutPhase.ACTIVE_SET
 
         _currentLandmarks.value = frame.landmarks
+        if (frame.frameWidth > 0 && frame.frameHeight > 0) {
+            _poseFrameSize.value = frame.frameWidth to frame.frameHeight
+        }
         workoutManager.onPoseFrame(frame)
 
         val criticalDeviations = frame.activeDeviations.filter {
@@ -267,8 +439,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
         if (criticalDeviations.isEmpty() || !wasActiveSet) return
 
-        // Dedupe: log a fault episode at most once per signature change or every 2s,
-        // so sustained bad form doesn't flood the telemetry table.
         val signature = criticalDeviations.joinToString("|") { it.jointName }
         val now = System.currentTimeMillis()
         if (signature == lastFaultSignature && now - lastFaultLogAt < 2000L) return
@@ -277,8 +447,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
         criticalDeviations.forEach { deviation ->
             activeFaultsBuffer.add(
-                com.fitlens.app.data.model.BiomechanicalFaultEntity(
-                    sessionId = 0L, // bound to the real session id on finishWorkout()
+                BiomechanicalFaultEntity(
+                    sessionId = 0L,
                     exerciseName = frame.currentExercise,
                     jointName = deviation.jointName,
                     jointAngleDegrees = frame.currentAngle,
@@ -289,16 +459,51 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun startWorkout(exercise: String = "Bodyweight Squats", targetReps: Int = 10, sets: Int = 3) {        previousRepCount = 0
-        previousPhase = WorkoutPhase.ACTIVE_SET
+    fun startWorkout(
+        exercise: String = "Bodyweight Squats",
+        targetReps: Int = 10,
+        sets: Int = 3,
+        includeWarmupAndCooldown: Boolean = false
+    ) {
+        startRoutine(
+            exercises = listOf(exercise),
+            targetReps = targetReps,
+            setsPerExercise = sets,
+            baseRestSeconds = 45,
+            includeWarmupAndCooldown = includeWarmupAndCooldown
+        )
+    }
+
+    fun startRoutine(
+        exercises: List<String>,
+        targetReps: Int = 10,
+        setsPerExercise: Int = 2,
+        baseRestSeconds: Int = 45,
+        includeWarmupAndCooldown: Boolean = true
+    ) {
+        previousRepCount = 0
+        previousPhase = if (includeWarmupAndCooldown) WorkoutPhase.WARMUP else WorkoutPhase.ACTIVE_SET
         lastFaultSignature = null
         lastFaultLogAt = 0L
         sessionPersisted = false
         _lastSavedSession.value = null
         activeVitalsBuffer.clear()
         activeFaultsBuffer.clear()
-        workoutManager.startWorkout(exercise, targetReps, sets)
-        audioCoach.announcePhase("Starting $exercise. ${sets} sets of $targetReps reps.")
+
+        workoutManager.startRoutine(
+            exercises = exercises,
+            targetReps = targetReps,
+            setsPerExercise = setsPerExercise,
+            baseRestSeconds = baseRestSeconds,
+            includeWarmup = includeWarmupAndCooldown,
+            includeCooldown = includeWarmupAndCooldown
+        )
+        val label = if (exercises.size > 1) "${exercises.size}-exercise routine" else exercises.firstOrNull() ?: "Workout"
+        audioCoach.announcePhase("Starting $label.")
+    }
+
+    fun skipWarmup() {
+        workoutManager.skipWarmup()
     }
 
     fun completeSet() {
@@ -311,10 +516,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun finishWorkout() {
-        // Guard against duplicate/invalid finishes: nothing to save while IDLE,
-        // and each workout persists at most once. COMPLETED is intentionally NOT
-        // rejected — WorkoutManager.completeSet() can flip the phase to COMPLETED
-        // on its own (auto-completion), and this call is what persists that session.
         val phase = workoutState.value.phase
         if (phase == WorkoutPhase.IDLE || sessionPersisted) return
         sessionPersisted = true
@@ -324,7 +525,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             val sessionId = repository.saveSession(session)
             _lastSavedSession.value = session.copy(id = sessionId)
 
-            // Persist time-series vitals & faults strictly in local SQLite
             if (activeVitalsBuffer.isNotEmpty()) {
                 val boundVitals = activeVitalsBuffer.map { it.copy(sessionId = sessionId) }
                 repository.recordVitalsTelemetry(boundVitals)
@@ -340,52 +540,101 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Simulates rep cycle and updates live landmarks for SkeletonOverlay and coaching.
+     * Simulates high aerobic/anaerobic exertion + facial strain so judges can see
+     * adaptive rest (+30s), coherent breathing pacer, and expression cues immediately.
+     */
+    fun simulateHighExertionAndStrain() {
+        vitalsAnalyzer.simulateExerciseExertion(0.88f)
+    }
+
+    /**
+     * Simulates exercise-appropriate movement or isometric hold progression, with optional
+     * biomechanical form fault (e.g., Squat knee valgus or Plank hip sagging).
      */
     fun simulateRep(withValgusError: Boolean = false) {
         viewModelScope.launch {
-            val kneeXVal = if (withValgusError) 0.48f else 0.42f
+            val state = workoutState.value
+            _poseFrameSize.value = 0 to 0
+
+            if (state.isIsometricHold) {
+                val plankLandmarks = if (withValgusError) {
+                    mapOf(
+                        PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.22f, 0.42f, 0f),
+                        PoseLandmarkManager.RIGHT_SHOULDER to LandmarkPoint(0.25f, 0.42f, 0f),
+                        PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.22f, 0.62f, 0f),
+                        PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.25f, 0.62f, 0f),
+                        PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.14f, 0.62f, 0f),
+                        PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.16f, 0.62f, 0f),
+                        PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.68f, 0f),
+                        PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.52f, 0.68f, 0f),
+                        PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.68f, 0.60f, 0f),
+                        PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.70f, 0.60f, 0f),
+                        PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.86f, 0.48f, 0f),
+                        PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.88f, 0.48f, 0f)
+                    )
+                } else {
+                    mapOf(
+                        PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.22f, 0.44f, 0f),
+                        PoseLandmarkManager.RIGHT_SHOULDER to LandmarkPoint(0.25f, 0.44f, 0f),
+                        PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.22f, 0.62f, 0f),
+                        PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.25f, 0.62f, 0f),
+                        PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.14f, 0.62f, 0f),
+                        PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.16f, 0.62f, 0f),
+                        PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.52f, 0.47f, 0f),
+                        PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.54f, 0.47f, 0f),
+                        PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.70f, 0.49f, 0f),
+                        PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.72f, 0.49f, 0f),
+                        PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.86f, 0.50f, 0f),
+                        PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.88f, 0.50f, 0f)
+                    )
+                }
+                val frame = poseManager.analyzeLandmarks(plankLandmarks)
+                onCameraPoseFrame(frame)
+                if (!withValgusError) {
+                    workoutManager.advanceIsometricHold(secondsDelta = 5)
+                }
+                vitalsAnalyzer.simulateExerciseExertion(if (withValgusError) 0.84f else 0.68f)
+                return@launch
+            }
+
+            val kneeXVal = if (withValgusError) 0.485f else 0.41f
             val eccentricLandmarks = mapOf(
                 PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.42f, 0.25f, 0f),
                 PoseLandmarkManager.RIGHT_SHOULDER to LandmarkPoint(0.58f, 0.25f, 0f),
-                PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.38f, 0.35f, 0f),
-                PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.62f, 0.35f, 0f),
-                PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.40f, 0.45f, 0f),
-                PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.60f, 0.45f, 0f),
-                PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.44f, 0.50f, 0f),
+                PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.35f, 0.36f, 0f),
+                PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.65f, 0.36f, 0f),
+                PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.41f, 0.28f, 0f),
+                PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.59f, 0.28f, 0f),
+                PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.42f, 0.52f, 0f),
                 PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(kneeXVal, 0.70f, 0f),
-                PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.40f, 0.90f, 0f),
-                PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.56f, 0.50f, 0f),
-                PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.58f, 0.70f, 0f),
-                PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.60f, 0.90f, 0f)
+                PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.36f, 0.88f, 0f),
+                PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.58f, 0.52f, 0f),
+                PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(if (withValgusError) 0.515f else 0.59f, 0.70f, 0f),
+                PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.64f, 0.88f, 0f)
             )
 
-            _currentLandmarks.value = eccentricLandmarks
             val downFrame = poseManager.analyzeLandmarks(eccentricLandmarks)
-            workoutManager.onPoseFrame(downFrame)
+            onCameraPoseFrame(downFrame)
+            vitalsAnalyzer.simulateExerciseExertion(if (withValgusError) 0.86f else 0.72f)
 
-            // Simulate HR exertion
-            vitalsAnalyzer.simulateExerciseExertion(0.75f)
-
-            // Concentric phase: standing upright
-            val standingLandmarks = mapOf(
-                PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.42f, 0.20f, 0f),
-                PoseLandmarkManager.RIGHT_SHOULDER to LandmarkPoint(0.58f, 0.20f, 0f),
-                PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.38f, 0.35f, 0f),
-                PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.62f, 0.35f, 0f),
-                PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.40f, 0.50f, 0f),
-                PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.60f, 0.50f, 0f),
-                PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.45f, 0.45f, 0f),
-                PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.45f, 0.68f, 0f),
-                PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.45f, 0.92f, 0f),
-                PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.55f, 0.45f, 0f),
-                PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.55f, 0.68f, 0f),
-                PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.55f, 0.92f, 0f)
-            )
-
-            _currentLandmarks.value = standingLandmarks
-            val upFrame = poseManager.analyzeLandmarks(standingLandmarks)
-            workoutManager.onPoseFrame(upFrame)
+            if (!withValgusError) {
+                val standingLandmarks = mapOf(
+                    PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.42f, 0.20f, 0f),
+                    PoseLandmarkManager.RIGHT_SHOULDER to LandmarkPoint(0.58f, 0.20f, 0f),
+                    PoseLandmarkManager.LEFT_ELBOW to LandmarkPoint(0.38f, 0.34f, 0f),
+                    PoseLandmarkManager.RIGHT_ELBOW to LandmarkPoint(0.62f, 0.34f, 0f),
+                    PoseLandmarkManager.LEFT_WRIST to LandmarkPoint(0.40f, 0.48f, 0f),
+                    PoseLandmarkManager.RIGHT_WRIST to LandmarkPoint(0.60f, 0.48f, 0f),
+                    PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.45f, 0.46f, 0f),
+                    PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.45f, 0.68f, 0f),
+                    PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.45f, 0.91f, 0f),
+                    PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.55f, 0.46f, 0f),
+                    PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.55f, 0.68f, 0f),
+                    PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.55f, 0.91f, 0f)
+                )
+                val upFrame = poseManager.analyzeLandmarks(standingLandmarks)
+                onCameraPoseFrame(upFrame)
+            }
         }
     }
 
@@ -393,10 +642,24 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         super.onCleared()
         val sdk = SmartSpectraSdk.shared
         sdk.metrics.removeObserver(sdkMetricsObserver)
+        sdk.insight.removeObserver(sdkInsightObserver)
         sdk.error.removeObserver(sdkErrorObserver)
         sdk.validationStatus.removeObserver(sdkValidationObserver)
         vitalsAnalyzer.resetCustomInput()
+        poseManager.close()
         audioCoach.shutdown()
         workoutManager.cleanup()
     }
+}
+
+private fun ExpressionType.toReadableLabel(): String? = when (this) {
+    ExpressionType.HAPPY    -> "Happy"
+    ExpressionType.NEUTRAL  -> "Neutral"
+    ExpressionType.SAD      -> "Sad"
+    ExpressionType.ANGRY    -> "Angry"
+    ExpressionType.SURPRISE -> "Surprise"
+    ExpressionType.FEAR     -> "Fear"
+    ExpressionType.DISGUST  -> "Disgust"
+    ExpressionType.CONTEMPT -> "Contempt"
+    else -> null
 }

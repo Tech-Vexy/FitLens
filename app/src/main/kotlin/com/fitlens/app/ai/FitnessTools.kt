@@ -10,7 +10,8 @@ data class WorkoutPlanResult(
     val goal: String,
     val targetExercises: List<String>,
     val targetDurationMinutes: Int,
-    val recommendedRestIntervalSeconds: Int
+    val recommendedRestIntervalSeconds: Int,
+    val aiCoachRationale: String = ""
 )
 
 data class SessionAnalysisResult(
@@ -45,7 +46,17 @@ data class MesocyclePlanResult(
     val goal: String,
     val totalWeeks: Int,
     val daysPerWeek: Int,
-    val phases: List<MesocycleWeekPhase>
+    val phases: List<MesocycleWeekPhase>,
+    val aiCoachRationale: String = ""
+)
+
+data class BiofeedbackCoachingResult(
+    val shouldTriggerBreathingPacer: Boolean,
+    val inhaleSeconds: Int,
+    val exhaleSeconds: Int,
+    val breathingDirective: String,
+    val expressionCue: String?,
+    val autonomicReadinessLabel: String
 )
 
 /**
@@ -64,14 +75,18 @@ class FitnessTools {
         val exercises = when {
             goal.contains("hypertrophy", ignoreCase = true) -> listOf("Barbell Squat", "Romanian Deadlift", "Overhead Press")
             goal.contains("endurance", ignoreCase = true) -> listOf("Jumping Jacks", "High Knees", "Burpees", "Mountain Climbers")
+            goal.contains("strength", ignoreCase = true) && equipment.contains("bodyweight", ignoreCase = true) ->
+                listOf("Bodyweight Squats", "Push-Ups", "Lunges", "Plank")
             else -> listOf("Bodyweight Squats", "Push-ups", "Plank", "Lunges")
         }
 
+        val restSec = if (experience.equals("advanced", ignoreCase = true)) 45 else 75
         return WorkoutPlanResult(
             goal = goal,
             targetExercises = exercises,
             targetDurationMinutes = durationMinutes,
-            recommendedRestIntervalSeconds = if (experience.equals("advanced", ignoreCase = true)) 45 else 75
+            recommendedRestIntervalSeconds = restSec,
+            aiCoachRationale = "Structured $durationMinutes-min $goal circuit ($equipment) with ${restSec}s SmartSpectra vitals-guided recovery windows."
         )
     }
 
@@ -165,20 +180,70 @@ class FitnessTools {
         @Param(description = "Total number of weeks in mesocycle (typically 4-6)") weeksCount: Int = 4,
         @Param(description = "Training frequency in days per week") daysPerWeek: Int = 3
     ): MesocyclePlanResult {
-        val phases = (1..weeksCount).map { week ->
+        val safeWeeks = weeksCount.coerceIn(2, 12)
+        val phases = (1..safeWeeks).map { week ->
             when (week) {
                 1 -> MesocycleWeekPhase(week, "Accumulation (Foundation)", 10, 6, "Focus on movement groove and establishing baseline form scores >90%.")
-                weeksCount -> MesocycleWeekPhase(week, "Active Deload (Supercompensation)", 6, 5, "50% volume deload to flush systemic fatigue and replenish glycogen.")
-                weeksCount - 1 -> MesocycleWeekPhase(week, "Realization (Overload Peak)", 16, 9, "Peak intensity: progressive overload with strict biomechanical vigilance.")
+                safeWeeks -> MesocycleWeekPhase(week, "Active Deload (Supercompensation)", 6, 5, "50% volume deload to flush systemic fatigue and replenish glycogen.")
+                safeWeeks - 1 -> MesocycleWeekPhase(week, "Realization (Overload Peak)", 16, 9, "Peak intensity: progressive overload with strict biomechanical vigilance.")
                 else -> MesocycleWeekPhase(week, "Intensification (Progressive Loading)", 13, 8, "Add +1 set or +2 reps per movement while maintaining joint stability.")
             }
         }
 
         return MesocyclePlanResult(
             goal = goal,
-            totalWeeks = weeksCount,
+            totalWeeks = safeWeeks,
             daysPerWeek = daysPerWeek,
-            phases = phases
+            phases = phases,
+            aiCoachRationale = "$safeWeeks-week $goal block ($daysPerWeek days/wk) pairing RPE progression with on-device HRV and form thresholds."
+        )
+    }
+
+    @Tool(description = "Synthesizes live SmartSpectra pulse, breathing rate, HRV RMSSD, and facial expressions into real-time wellness biofeedback.")
+    fun evaluateHolisticBiofeedback(
+        @Param(description = "Live heart rate in BPM") heartRateBpm: Double,
+        @Param(description = "Live breathing rate in breaths per minute") breathingRateBpm: Double,
+        @Param(description = "Live HRV RMSSD in milliseconds") hrvRmssdMs: Double = 45.0,
+        @Param(description = "Detected facial expression label") facialExpression: String = "Neutral"
+    ): BiofeedbackCoachingResult {
+        val needsBreathingPacer = breathingRateBpm >= 21.0 || heartRateBpm >= 145.0
+        val inhaleSec = 4
+        val exhaleSec = if (breathingRateBpm >= 25.0) 6 else 5
+
+        val breathingDirective = if (needsBreathingPacer) {
+            val brLabel = if (breathingRateBpm > 0.0) "${breathingRateBpm.toInt()} brpm" else "elevated effort"
+            "Recovery Breathing ($brLabel): Inhale ${inhaleSec}s through nose • Exhale ${exhaleSec}s slowly."
+        } else if (breathingRateBpm > 0.0) {
+            "Steady respiratory cadence (${breathingRateBpm.toInt()} brpm)."
+        } else {
+            "Face camera in steady light to lock respiratory cadence."
+        }
+
+        val exprNorm = facialExpression.trim().lowercase()
+        val expressionCue = when {
+            exprNorm in setOf("strain", "angry", "fear", "disgust", "sad", "contempt") ->
+                "Facial strain detected ($facialExpression) — unclench your jaw, relax your brow, and exhale smoothly."
+            exprNorm == "happy" ->
+                "Smiling under load — great composure and rhythmic effort!"
+            exprNorm == "surprise" ->
+                "Keep gaze anchored forward to stabilize cervical spine alignment."
+            else -> null
+        }
+
+        val readinessLabel = when {
+            hrvRmssdMs >= 50.0 -> "High Readiness (${hrvRmssdMs.toInt()} ms HRV)"
+            hrvRmssdMs >= 28.0 -> "Balanced Load (${hrvRmssdMs.toInt()} ms HRV)"
+            hrvRmssdMs > 0.0 -> "High Exertion Load (${hrvRmssdMs.toInt()} ms HRV)"
+            else -> "Calibrating HRV"
+        }
+
+        return BiofeedbackCoachingResult(
+            shouldTriggerBreathingPacer = needsBreathingPacer,
+            inhaleSeconds = inhaleSec,
+            exhaleSeconds = exhaleSec,
+            breathingDirective = breathingDirective,
+            expressionCue = expressionCue,
+            autonomicReadinessLabel = readinessLabel
         )
     }
 }

@@ -1,62 +1,30 @@
-# FitLens — Competition & Hackathon Submission Guide
+# FitLens — Presage SmartSpectra SDK Challenge Submission & Demo Guide
 
-FitLens is a real-time AI fitness coach combining computer vision pose tracking, contact-free rPPG vitals sensing, and personalized agentic coaching built on **Google ADK Kotlin**, **Firebase AI Logic**, and **Presage SmartSpectra**.
+FitLens is tailored to compete for **Best Overall Human-Sensing Experience**, **Best Thoughtful Real-World Use**, and **Most Creative or Delightful Use** in the **Presage SmartSpectra SDK Challenge (`#presagechallenge`)**.
 
----
-
-## 🏆 The 5 Core Differentiators
-
-### 1. Zero AI Key Management Architecture
-* **The Problem**: Typical mobile AI apps embed raw `GEMINI_API_KEY` or `OPENAI_API_KEY` strings in build configurations or APK assets, which can be extracted via reverse engineering (`apktool`/`jadx`).
-* **The FitLens Solution**: FitLens completely eliminates client API keys. The app authenticates via **Firebase AI Logic + Firebase App Check** (backed by **Google Play Integrity**). Quota and identity are attested by Google backends based on binary signature, not shared secrets.
-* **Dual Backend Flexibility**: Also supports **Google Application Default Credentials (ADC)** for enterprise cloud environments, backend proxies, and CI test pipelines.
-
-### 2. 100% On-Device Local SQLite Health Data Vault
-* **The Problem**: Many fitness and biometric apps leak intimate physiological data (heart rate, HRV, breathing rhythms, video frames) to cloud analytics servers, violating GDPR/HIPAA expectations.
-* **The FitLens Solution**: All physiological telemetry, rPPG waveforms, and MediaPipe joint angle time-series are stored **strictly on-device in local SQLite (`fitlens_health_sqlite.db`)**. No health data ever leaves the device.
-* **Data Portability**: Users can export their local SQLite records to an on-device JSON backup via [`LocalDataExportManager`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/data/LocalDataExportManager.kt) without third-party network transmissions.
-
-### 3. Dual Computer Vision Stream Without Hardware Contention
-* **The Challenge**: Both MediaPipe and SmartSpectra typically request full ownership of the device camera hardware, causing `CameraDevice` lock crashes if initialized concurrently.
-* **The FitLens Solution**: CameraX owns the stream and feeds a single [`DualStreamAnalyzer`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/camera/DualStreamAnalyzer.kt), which dispatches `ImageProxy` frames simultaneously to **MediaPipe** (33 3D skeletal landmarks) and **SmartSpectra** ([`useCustomInput()`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/vitals/PresageFrameAnalyzer.kt)) in non-blocking threads.
-* **Real-time PPG Waveform**: Live arterial pressure trace is rendered dynamically via [`PulseWaveformView`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/vitals/PulseWaveformView.kt).
-
-### 4. Agentic Biomechanics & Physiological Coaching
-* **Beyond Passive Tracking**: Standard fitness trackers only count reps. FitLens implements an active **ADK Kotlin `LlmAgent`** with `@Tool` functions:
-  * **Vitals-Guided Adaptive Rest (`calculateAdaptiveRest`)**: Dynamically extends rest intervals (+15s / +30s) if the user's recovery heart rate remains elevated.
-  * **Biomechanical Fatigue Halting (`evaluateBiomechanicalFatigue`)**: If 3 consecutive form breakdowns occur (e.g. knees caving inward), the coach immediately halts the set to prevent joint injury.
-  * **Multi-Week Periodization (`generateMesocyclePeriodization`)**: Automatically structures 4-week mesocycles with programmed progressive overload and deloads.
-
-### 5. Hybrid Edge-Cloud AI Topology
-* **Cloud Tier (`gemini-3.8-flash`)**: Firebase-backed cloud model for multi-week plan generation and holistic session evaluation.
-* **Edge Sub-Agent (`gemini-nano-v2`)**: On-device ML Kit model for sub-10ms safety reaction times (instant form fault feedback) and offline operation.
+- Ready-to-publish DEV post (using the official challenge template): [**`docs/DEV_SUBMISSION_POST.md`**](docs/DEV_SUBMISSION_POST.md)
 
 ---
 
-## 📱 Live Demo Walkthrough Script for Judges
+## 🎥 2–3 Minute Judge Demo Video Script
 
-| Step | Action | What Judges See / Hear |
+Record on a physical Android phone in good front-facing light so judges clearly see both your live SmartSpectra physiological signals and the aligned 3D MediaPipe skeleton!
+
+| Timestamp | Action on Screen | What Judges See & Hear |
 | :---: | :--- | :--- |
-| **1** | Open App | **Dashboard** with 3 Status Cards confirming: Zero AI Key active, Presage Key injected via Secrets plugin, and ADK Agent initialized. |
-| **2** | Hard Gate Smoke Test | Tap **"Run Day 1 Hard Gate Automated Verification"**. Within seconds, a green banner confirms valid rPPG pulse extraction and 33 skeletal landmarks via headless feed. |
-| **3** | AI Plan Generation | Under **ADK Coach AI Generator**, select `Hypertrophy` + `Dumbbells` and tap **"Generate Plan via ADK Agent"**. The ADK agent calls `@Tool generateWorkoutPlan` and returns structured exercises and rest intervals. |
-| **4** | Start Workout HUD | Tap **"Start Custom Plan"** (or tap **"Squats"**). The workout HUD opens. Tap the **Camera icon** to enable the live camera and see the green skeleton wireframe and live PPG pulse waveform. |
-| **5** | Real-Time Rep Tracking | Tap **"Simulate Rep"**. The rep counter increments to `1`, the TTS audio coach speaks *"One"*, and the joint angle gauge updates. |
-| **6** | Form Fault Intervention | Tap **"Simulate Valgus"**. The skeleton turns warning red, the audio coach warns *"Knees caving inward (valgus). Push knees outward!"*, and the form accuracy score drops. |
-| **7** | Vitals-Guided Rest | Complete the set. The timer enters **REST INTERVAL**. Because the simulated HR was high, an orange badge appears: *"ADK Coach: Adaptive Vitals Extension Applied (+30s)"*, and the audio coach announces the extension. |
-| **8** | Session Summary & SQLite | Finish the workout. The **Summary Screen** displays form accuracy %, average HR, and progressive overload recommendations. |
-| **9** | Analytics & Local Export | Navigate to **Analytics**. View the joint stability breakdown and tap the **Download icon** to verify the local SQLite JSON export. |
+| **0:00 – 0:20** | **Open FitLens** (Cold Launch) | Camera is **off** behind the **Consent-First Human Sensing** backdrop. Tap **"Review Consent & Privacy"** to show the explicit consent modal disclosing ephemeral RAM frames, 100% local SQLite storage, SmartSpectra aggregate telemetry opt-out (`enableTelemetry`), offline Edge AI toggle, and the non-medical wellness disclaimer. Tap **"Agree & Enable Sensing"**. |
+| **0:20 – 0:55** | **Live Vitals Dashboard** (`Start Measurement`) | Tap **"Start Measurement"** and face the camera. Within seconds, judges see live **Pulse BPM + Karvonen HR Zone**, **Breathing Rate (`brpm`)**, **HRV RMSSD (`ms`)**, **Facial Expression**, and three real-time waveforms (**Arterial Pressure**, **Chest**, **Abdomen**), plus live `validationStatus` framing hints. Tap **"Insight"** in the top bar to show a live SmartSpectra wellness summary. |
+| **0:55 – 1:15** | **Profile, Zones & Smoke Test** | Tap the **Profile/Privacy icon** (top-right). Adjust the Age / Resting HR slider to show personalized **Karvonen 5-Zone BPM thresholds** updating live, show the **Telemetry** & **100% On-Device Edge AI** switches, and tap **"Run Day 1 Hard Gate Smoke Test"** for instant green pipeline verification. |
+| **1:15 – 1:40** | **ADK AI Coach Routine Generator** | Tap **"Start Workout"** → switch to **"ADK AI Coach Plan"**. Select `Mobility & Core` + `Bodyweight` and tap **"Generate Plan & 4-Week Mesocycle"**. Show the generated multi-exercise circuit and 4-week RPE periodization phases, or pick **Quick Exercise** (`Bodyweight Squats` or timed `Plank`) and start! |
+| **1:40 – 2:20** | **Live Dual-Stream Workout HUD** | Perform 2–3 real squats (or tap `Simulate Rep` / `Simulate Valgus` / `Sim High HR` if demonstrating fault overrides):<br>• **3D Neon Skeleton** tracks upright & mirrored in `RunningMode.VIDEO` without camera contention.<br>• **4-Signal Biofeedback Card** updates live Pulse, Breath `brpm`, HRV `ms`, Expression, and pulse waveform.<br>• **Biomechanical Safety**: Cave knees inward—skeleton joints glow red and TTS audio warns *"Knees caving inward (valgus)!"*.<br>• **Vitals-Guided Rest + Breathing Pacer**: Complete the set at elevated HR—rest auto-extends (`+30s`) and the **Animated 4s-In / 6s-Out Coherent Breathing Pacer Ring** pulses to guide respiratory recovery! |
+| **2:20 – 2:45** | **Summary & Local SQLite Vault** | Finish into Cooldown/Summary, then open **Local Vault & Stats** from the dashboard. Show the SQLite-computed **Biomechanical Telemetry Breakdown**, tap the **Download icon** to export local JSON, and point out the **Trash icon** for one-tap permanent local data erasure. |
 
 ---
 
-## 🧪 Verification Matrix
+## ✅ Pre-Submission Checklist (`#presagechallenge` Rules)
 
-FitLens contains **21 automated unit tests** verifying all core contracts:
-
-```bash
-./gradlew test
-```
-
-- Zero secrets committed in Git history.
-- Zero `GEMINI_API_KEY` strings in source code or APK.
-- All 5 Day 1 Hard Gates verified in headless CI.
+- [x] **Functional SmartSpectra SDK integration** (`com.presagetech:smartspectra:3.4.0` via `useCustomInput()`) responding in real time to **Pulse**, **Breathing Rate**, **HRV RMSSD**, and **Facial Expressions**, plus `validationStatus` and `sdk.insight`.
+- [x] **Consent & Data Handling complete** both in-app ([`ConsentAndPrivacySheet.kt`](app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt)) and in the DEV post ([`docs/DEV_SUBMISSION_POST.md`](docs/DEV_SUBMISSION_POST.md)).
+- [x] **Strict non-medical wellness framing**—zero diagnosis, treatment, or clinical decision-making claims; zero covert or pre-consent monitoring.
+- [x] **No secrets in Git or transcript**—`secrets.properties` is git-ignored; zero `GEMINI_API_KEY` strings in source; verify any uploaded Agent Session transcript contains no keys and is set to **Public** on DEV.
+- [x] **Include tag `#presagechallenge`** when publishing [`docs/DEV_SUBMISSION_POST.md`](docs/DEV_SUBMISSION_POST.md) before **November 22, 2026 at 11:59 PM PST**.

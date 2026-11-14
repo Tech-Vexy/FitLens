@@ -5,37 +5,43 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.fitlens.app.data.profile.UserProfile
 import com.presagetech.smartspectra.FrameSubmissionResult
+import com.presagetech.smartspectra.FrameTransform
 import com.presagetech.smartspectra.ProcessingStatus
 import com.presagetech.smartspectra.SmartSpectraSdk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
 
 /**
- * Snapshot of all physiological metrics from the SmartSpectra rPPG pipeline.
+ * Snapshot of all physiological and behavioral metrics from the SmartSpectra pipeline.
  */
 data class VitalsReading(
     val heartRateBpm: Double = 0.0,
     val heartRateVariabilityMs: Double = 0.0,
     val breathingRateBpm: Double = 0.0,
+    val facialExpression: String? = null,
     val arterialPressureTrace: List<Float> = emptyList(),
+    val chestBreathingTrace: List<Float> = emptyList(),
+    val abdomenBreathingTrace: List<Float> = emptyList(),
     val signalConfidence: Float = 0.0f,
     val heartRateZone: HeartRateZone = HeartRateZone.RESTING,
+    val validationHint: String = "",
     val smartSpectraLlmInsight: String? = null,
     val isReliable: Boolean = false,
     val timestampMs: Long = System.currentTimeMillis()
 )
 
 enum class HeartRateZone(val label: String, val colorHex: Long) {
-    RESTING("Resting",            0xFF9E9E9E),
-    WARMUP("Warmup (Zone 1)",     0xFF4CAF50),
-    AEROBIC("Aerobic (Zone 2)",   0xFF2196F3),
+    RESTING("Resting",              0xFF9E9E9E),
+    WARMUP("Warmup (Zone 1)",       0xFF4CAF50),
+    AEROBIC("Aerobic (Zone 2)",     0xFF2196F3),
     ANAEROBIC("Anaerobic (Zone 3)", 0xFFFF9800),
-    MAX("Max Threshold (Zone 4)", 0xFFF44336)
+    MAX("Max Threshold (Zone 4)",   0xFFF44336)
 }
 
 // ---------------------------------------------------------------------------
@@ -46,22 +52,12 @@ enum class HeartRateZone(val label: String, val colorHex: Long) {
  * CameraX ImageAnalysis.Analyzer that submits each frame to SmartSpectra via the
  * official Headless / custom-input API:
  *
- *   val input = SmartSpectraSdk.shared.useCustomInput()  // called once per session
- *   sdk.start()          // called once from the coroutine that owns the session
- *   input.sendFrame(imageProxy)   // called here for every CameraX frame
+ *   val input = SmartSpectraSdk.shared.useCustomInput(frameTransform)
+ *   sdk.start()
+ *   input.sendFrame(imageProxy)
  *
- * The SDK's LiveData (sdk.metrics, sdk.error, sdk.validationStatus) must be observed
- * in the Activity / ViewModel — see WorkoutViewModel for that wiring.
- *
- * This class also maintains a [vitalsFlow] StateFlow so that the ViewModel and UI can
- * collect the latest reading reactively even before SDK LiveData arrives.
- *
- * The [CustomInput] handle is cached after the first successful [useCustomInput] call
- * and reused across all frames. Call [resetCustomInput()] when the SDK session ends
- * (e.g. after sdk.stop()) so the next session gets a fresh handle.
- *
- * @param userProfile Used for personalised Karvonen heart-rate zone classification.
- *                    Call [updateUserProfile] whenever the DataStore emits an update.
+ * The SDK's LiveData (sdk.metrics, sdk.insight, sdk.error, sdk.validationStatus) is
+ * observed in WorkoutViewModel and pushed into [vitalsFlow].
  */
 class PresageFrameAnalyzer(
     userProfile: UserProfile = UserProfile()
@@ -71,42 +67,48 @@ class PresageFrameAnalyzer(
         private const val TAG = "PresageFrameAnalyzer"
     }
 
-    // Mutable so the ViewModel can push DataStore profile updates
     @Volatile private var activeProfile: UserProfile = userProfile
 
     private val _vitalsFlow = MutableStateFlow(VitalsReading())
     val vitalsFlow: StateFlow<VitalsReading> = _vitalsFlow.asStateFlow()
 
-    // Cached CustomInput handle — obtained once per SDK session and reused across frames
     @Volatile private var customInput: com.presagetech.smartspectra.CustomInput? = null
+    @Volatile private var frameTransform: FrameTransform = FrameTransform.NONE
 
     // -----------------------------------------------------------------------
     // Camera frame submission
     // -----------------------------------------------------------------------
 
     /**
-     * Called by CameraX on every captured frame.
-     *
-     * The [CustomInput] handle is obtained once per SDK session via [useCustomInput]
-     * and reused across frames. Frames are submitted directly — no copy, no bitmap
-     * conversion required for YUV_420_888 images that are unrotated.
-     *
-     * Always closes [imageProxy] in the finally block, including on rejection, as
-     * required by the SDK contract.
+     * Configures an optional [FrameTransform] for custom input sessions.
+     * Changing the transform resets the cached handle so the next session picks it up.
      */
+    fun setFrameTransform(transform: FrameTransform) {
+        if (frameTransform != transform) {
+            frameTransform = transform
+            customInput = null
+        }
+    }
+
+    /**
+     * Obtains or reuses the [CustomInput] handle. Must be called while the SDK is stopped
+     * (before [SmartSpectraSdk.start]), per the SmartSpectra headless-mode contract.
+     */
+    @Synchronized
+    fun ensureCustomInput(): com.presagetech.smartspectra.CustomInput {
+        return customInput ?: SmartSpectraSdk.shared.useCustomInput(frameTransform).also {
+            customInput = it
+        }
+    }
+
     override fun analyze(imageProxy: ImageProxy) {
         try {
-            // Skip submission entirely while the SDK pipeline isn't running —
-            // the camera stays bound between sessions, and sendFrame() on a
-            // stopped SDK throws, which would mean an exception per frame.
             when (SmartSpectraSdk.shared.processingStatus.value) {
                 ProcessingStatus.RUNNING, ProcessingStatus.STARTING -> Unit
                 else -> return
             }
 
-            // Lazily obtain the CustomInput handle on the first frame, then reuse it
-            val sdk = SmartSpectraSdk.shared
-            val input = customInput ?: sdk.useCustomInput().also { customInput = it }
+            val input = customInput ?: return
             when (val result = input.sendFrame(imageProxy)) {
                 is FrameSubmissionResult.Accepted -> Unit
                 is FrameSubmissionResult.Rejected -> {
@@ -114,7 +116,6 @@ class PresageFrameAnalyzer(
                 }
             }
         } catch (e: Exception) {
-            // SDK may not be started yet (e.g. first few frames before sdk.start() completes)
             Log.v(TAG, "sendFrame skipped: ${e.message}")
         } finally {
             imageProxy.close()
@@ -122,85 +123,119 @@ class PresageFrameAnalyzer(
     }
 
     /**
-     * Resets the cached [CustomInput] handle.
-     * Call this after [SmartSpectraSdk.stop()] so the next session gets a fresh handle.
+     * Resets the cached [CustomInput] handle after [SmartSpectraSdk.stop()].
      */
     fun resetCustomInput() {
         customInput = null
     }
 
     // -----------------------------------------------------------------------
-    // Vitals reading — pushed by WorkoutViewModel from sdk.metrics LiveData
+    // Vitals reading & SDK stream updates
     // -----------------------------------------------------------------------
 
-    /**
-     * Updates [vitalsFlow] with a new reading decoded from sdk.metrics.
-     * Called by WorkoutViewModel's metrics observer on the main thread.
-     */
     fun updateVitalsReading(
         hr: Double,
         hrv: Double,
         breathingRate: Double,
         confidence: Float,
-        llmInsight: String? = null,
-        pulseTrace: List<Float> = emptyList()
+        llmInsight: String? = _vitalsFlow.value.smartSpectraLlmInsight,
+        pulseTrace: List<Float> = _vitalsFlow.value.arterialPressureTrace,
+        chestTrace: List<Float> = _vitalsFlow.value.chestBreathingTrace,
+        abdomenTrace: List<Float> = _vitalsFlow.value.abdomenBreathingTrace,
+        expression: String? = _vitalsFlow.value.facialExpression
     ) {
         val zone = calculateZone(hr)
+        val currentHint = _vitalsFlow.value.validationHint
         _vitalsFlow.value = VitalsReading(
-            heartRateBpm         = hr,
+            heartRateBpm = hr,
             heartRateVariabilityMs = hrv,
-            breathingRateBpm     = breathingRate,
+            breathingRateBpm = breathingRate,
+            facialExpression = expression,
             arterialPressureTrace = pulseTrace,
-            signalConfidence     = confidence,
-            heartRateZone        = zone,
+            chestBreathingTrace = chestTrace,
+            abdomenBreathingTrace = abdomenTrace,
+            signalConfidence = confidence,
+            heartRateZone = zone,
+            validationHint = currentHint,
             smartSpectraLlmInsight = llmInsight,
-            isReliable           = confidence > 0.65f,
-            timestampMs          = System.currentTimeMillis()
+            isReliable = confidence > 0.65f,
+            timestampMs = System.currentTimeMillis()
         )
+    }
+
+    fun updateValidationHint(hint: String) {
+        _vitalsFlow.update { it.copy(validationHint = hint) }
+    }
+
+    fun updateSmartSpectraInsight(insight: String?) {
+        _vitalsFlow.update { it.copy(smartSpectraLlmInsight = insight) }
+    }
+
+    fun clearSessionReadings() {
+        _vitalsFlow.value = VitalsReading()
     }
 
     // -----------------------------------------------------------------------
     // Profile & zone classification
     // -----------------------------------------------------------------------
 
-    /**
-     * Updates the UserProfile used for Karvonen zone classification.
-     * Call this whenever the DataStore profile Flow emits a new value.
-     */
     fun updateUserProfile(profile: UserProfile) {
         activeProfile = profile
+        val currentHr = _vitalsFlow.value.heartRateBpm
+        if (currentHr > 0.0) {
+            _vitalsFlow.update { it.copy(heartRateZone = profile.getHeartRateZone(currentHr)) }
+        }
         Log.d(TAG, "UserProfile updated: age=${profile.age}, restHR=${profile.restingHeartRate}")
     }
 
     private fun calculateZone(bpm: Double): HeartRateZone = activeProfile.getHeartRateZone(bpm)
 
     // -----------------------------------------------------------------------
-    // CI / emulator testing helpers
+    // CI / emulator / live demo simulation helpers
     // -----------------------------------------------------------------------
 
     /**
-     * Synthesises a plausible vitals reading proportional to [exertionFactor] (0..1).
-     * Used by HeadlessVideoFeeder and the Day-1 smoke test when no real camera is available.
+     * Synthesises a plausible multi-signal vitals reading proportional to [exertionFactor] (0..1),
+     * including pulse, HRV, breathing rate, arterial/breathing waveforms, and facial expression.
      */
     fun simulateExerciseExertion(exertionFactor: Float) {
-        // Map exertion onto the user's own Karvonen reserve so the simulated HR lands in
-        // the zone the exertion factor represents (e.g. 0.85 -> anaerobic).
+        val clamped = exertionFactor.coerceIn(0f, 1f)
         val profile = activeProfile
         val targetHr = profile.restingHeartRate +
-            exertionFactor * (profile.maxHeartRate - profile.restingHeartRate)
+            clamped * (profile.maxHeartRate - profile.restingHeartRate)
         val hr  = (targetHr + (Math.random() - 0.5) * 4.0).coerceIn(55.0, 195.0)
-        val hrv = (65.0 - exertionFactor * 35.0).coerceIn(15.0, 90.0)
-        val br  = (14.0 + exertionFactor * 18.0).coerceIn(10.0, 36.0)
+        val hrv = (65.0 - clamped * 35.0).coerceIn(15.0, 90.0)
+        val br  = (14.0 + clamped * 18.0).coerceIn(10.0, 36.0)
 
-        val wave = List(32) { i ->
-            val phi = (i / 32f) * 2 * Math.PI
+        val pulseWave = List(48) { i ->
+            val phi = (i / 16f) * 2 * Math.PI
             (Math.sin(phi) + 0.35 * Math.sin(phi * 2.0)).toFloat()
         }
-        val insight = if (exertionFactor > 0.7f)
-            "SmartSpectra: Anaerobic threshold — consider extending rest interval."
-        else
-            "SmartSpectra: Aerobic rhythm steady. Good autonomic balance."
+        val breathWave = List(48) { i ->
+            val phi = (i / 24f) * 2 * Math.PI
+            Math.sin(phi).toFloat()
+        }
+        val simulatedExpression = when {
+            clamped > 0.80f -> "Strain"
+            clamped < 0.45f -> "Happy"
+            else -> "Neutral"
+        }
+        val insight = if (clamped > 0.7f) {
+            "SmartSpectra: Anaerobic threshold & elevated breathing (${br.toInt()} brpm) — paced recovery breathing recommended."
+        } else {
+            "SmartSpectra: Aerobic rhythm steady (${hrv.toInt()} ms HRV). Good autonomic balance."
+        }
 
-        updateVitalsReading(hr, hrv, br, 0.92f, insight, wave)
+        updateVitalsReading(
+            hr = hr,
+            hrv = hrv,
+            breathingRate = br,
+            confidence = 0.92f,
+            llmInsight = insight,
+            pulseTrace = pulseWave,
+            chestTrace = breathWave,
+            abdomenTrace = breathWave.map { it * 0.85f },
+            expression = simulatedExpression
+        )
     }
 }

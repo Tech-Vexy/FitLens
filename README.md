@@ -1,236 +1,94 @@
-# FitLens — AI Fitness & Biomechanics Coach
+# FitLens — Contactless Human-Sensing AI Fitness & Biomechanics Coach
 
-FitLens is a real-time AI fitness coach combining computer vision pose tracking, contact-free vitals sensing, and personalized agentic coaching.
+FitLens is a real-time Android fitness and biomechanics coach built with the **Presage SmartSpectra Android SDK**, **MediaPipe Pose Landmarker**, and **Google ADK Kotlin**. Using a single camera stream without wearables or chest straps, FitLens responds live to **pulse rate**, **breathing rate**, **HRV (RMSSD)**, **facial expressions**, and **33-point 3D joint angles**—adapting rest intervals, pacing recovery breathing, coaching facial tension release, and halting sets before form breakdown causes joint strain.
 
----
-
-## 🏗️ Architecture: ADK Kotlin + Firebase AI Logic
-
-FitLens features a **zero-key AI architecture** backed by Google's Agent Development Kit (ADK) Kotlin and Firebase App Check.
-
-### 1. Presentation Layer (Jetpack Compose & Material 3)
-- **`MainActivity` + Navigation Compose `NavHost`**: Single-activity app with four routes — `vitals` (dashboard), `workout`, `summary`, `analytics`.
-  - **Vitals dashboard (`FitLensScreen`)**: Live CameraX preview with SmartSpectra rPPG metrics (pulse, breathing rate, HRV RMSSD, expression, arterial-pressure and breathing waveforms) plus Start/Stop measurement controls and entry points to the workout flow and analytics.
-  - **`WorkoutDestination`**: Pre-workout setup (exercise picker, rep/set steppers) → live session → auto-persist + summary navigation. Starts/stops the SmartSpectra pipeline per visit.
-  - `WorkoutSessionScreen`: Real-time HUD displaying camera/pose feedback, joint angles, live rep counter, Presage rPPG heart rate, heart rate zones, dynamic rest countdown, form deviation warnings, and TTS audio coaching.
-  - `WorkoutSummaryScreen`: Post-workout biomechanical assessment, recovery intervention summaries, and progressive overload recommendations.
-  - `WorkoutAnalyticsScreen`: Session history, aggregate stats, progression insight, and on-device JSON export.
-- **Unidirectional State Flow**: `WorkoutViewModel` is activity-scoped (survives navigation) and exposes `StateFlow`s (`workoutState`, `vitalsFlow`, `currentLandmarks`, `workoutHistory`, `latestInsight`, `lastSavedSession`) backed by `WorkoutManager` and Room.
-
-### 2. Application Layer
-- **ADK Fitness Coach (`FitnessCoachAgent`)**:
-  - Defined using ADK Kotlin `AdkLlmAgent` running via `AdkInMemoryRunner`.
-  - **Authentication & Model Backends**:
-    - **Firebase AI Logic (`gemini-3.8-flash`)**: Authenticated via **Firebase App Check** (Play Integrity in release, Debug provider in debug). No client API key in the APK.
-    - **On-Device Edge adapter (`gemini-nano-v2`)**: `EdgeGeminiNanoAdapter` backed by `LocalEdgeEngine` — a deterministic, network-free tool router that discovers the agent's `@Tool` methods via reflection and dispatches matching intents to `FitnessTools` locally (sub-10ms latency, zero model download). There is no ML Kit / LiteRT LLM inference; edge "reasoning" is rule-based domain routing.
-    - There is **no Google ADC backend** in the codebase; ADC/JVM execution described in earlier revisions was never implemented.
-  - `@Tool` & `@Param` annotated domain functions in `FitnessTools`:
-    - `generateWorkoutPlan`: Goal, experience, equipment, and duration-tailored routines.
-    - `analyzeSession`: Comprehensive biomechanical and physiological evaluation.
-    - `calculateAdaptiveRest`: Vitals-guided recovery tool that dynamically extends rest intervals (+15s / +30s) when heart rate remains elevated.
-    - `evaluateBiomechanicalFatigue`: Safety tool monitoring consecutive form deviations to prevent joint injury.
-    - `generateMesocyclePeriodization`: Multi-week periodization plan generator.
-    - Note: `FitnessTools` functions are invoked **directly** by `FitnessCoachAgent` for safety/rest paths (e.g. `calculateAdaptiveRest`, `checkBiomechanicalFatigue`). For `runner.execute()` prompts, the cloud path calls Firebase AI Logic while the edge path routes through `LocalEdgeEngine`'s deterministic @Tool dispatcher — neither performs LLM-driven tool calling.
-- **Workout Manager (`WorkoutManager`)**:
-  - State machine: `IDLE` ➔ `ACTIVE_SET` ➔ `REST_INTERVAL` ➔ `COMPLETED`. (`WARMUP` and `COOLDOWN` exist in the `WorkoutPhase` enum but are never entered.)
-  - Coordinates set transitions, adaptive rest intervals, and session entity creation. All state-mutating entry points are `@Synchronized` because they are invoked from the CameraX analyzer thread, the main thread, and session coroutines.
-- **Audio Coach Engine (`FitLensAudioCoach`)**:
-  - Hands-free voice coaching via Android TTS: vocalizes reps, form corrections, and phase transitions with throttling. Driven by `WorkoutViewModel` during live workout sessions.
-- **Progress Analyzer (`ProgressAnalyzer`)**:
-  - Tracks volume, form stability, and recovery readiness to recommend progressive overload (e.g. +2 reps or reduced rest intervals).
-
-### 3. Sensing & Intelligence Layer
-- **CameraX & DualStreamAnalyzer**:
-  - `DualStreamAnalyzer` feeds each CameraX `ImageProxy` to both pipelines on the analyzer thread: MediaPipe pose **first** (because `PresageFrameAnalyzer` closes the proxy when it returns, per the SmartSpectra SDK contract), then SmartSpectra vitals. No camera device lock contention.
-  - Pose results are delivered via an `onPoseFrame` callback to `WorkoutViewModel`, which feeds `WorkoutManager`, the `SkeletonOverlay` landmark state, and the local fault buffer. `enablePoseAnalysis = false` skips MediaPipe entirely on vitals-only screens (used by `MainActivity`).
-  - `CameraPreviewView` binds/unbinds CameraX use cases to the Compose lifecycle and releases the camera on dispose.
-  - `SkeletonOverlay` (used by `WorkoutSessionScreen`) draws bones and joints from the landmark map.
-- **Presage Android SDK (`PresageFrameAnalyzer`)**:
-  - Ingests CameraX `ImageProxy` frames via `useCustomInput()` (headless/custom-input mode); rejected submissions and pre-start frames are logged and skipped.
-  - `CustomInput` handle is cached once per SDK session and reused across all frames; `resetCustomInput()` is called on stop/pause so the next session gets a fresh handle.
-  - Computes pulse, HRV, breathing rate, and categorizes into 5 personalized heart-rate zones via the Karvonen HRR model (`UserProfile`).
-  - SDK errors and validation status are observed and logged via `WorkoutViewModel`.
-- **MediaPipe Pose Landmarker (`PoseLandmarkManager`)**:
-  - Lazy-initialized `PoseLandmarker` from `pose_landmarker.task` asset on first frame.
-  - Converts `ImageProxy` (YUV_420_888) to a grayscale `Bitmap` using the Y plane (honoring `rowStride`/`pixelStride` without disturbing the shared buffer), then maps the best-scoring detected pose to normalized `LandmarkPoint`s.
-  - Real-time 33 3D skeletal landmarks across a multi-exercise library:
-    - **Squats**: Knee flexion angle, knee valgus collapse detection, and torso forward lean.
-    - **Push-ups**: Elbow flexion angle and spinal alignment.
-    - **Lunges**: Front knee drive angle and vertical torso alignment.
-    - **Plank**: Core straightness line (shoulder-hip-ankle) with hip sagging/piking flags.
-  - Repetition detection state machine (`START` ➔ `ECCENTRIC` ➔ `INFLECTION` ➔ `CONCENTRIC` ➔ `COMPLETED`).
-- **Firebase AI Logic**: Authenticated and gated via Firebase App Check (Play Integrity on production, Debug provider during development).
-
-### 4. Data Layer (100% Local SQLite Health Data Vault)
-- **Local SQLite Privacy Guarantee**: Workout sessions, physiological vitals time-series (heart rate, HRV, respiratory rate, HR zone, signal confidence — sampled during `ACTIVE_SET`/`REST_INTERVAL`), and biomechanical fault events are stored **strictly on-device in local SQLite (`fitlens_health_sqlite.db`)**. The live arterial-pressure waveform is rendered on screen but is **not** persisted to SQLite.
-- **No Health Data Cloud Sync**: Biometric vitals and physiological data are explicitly prohibited from cloud transmission, maintaining complete user privacy and HIPAA/GDPR health compliance.
-- **`WorkoutDatabase` & `WorkoutDao` (Room on SQLite)**:
-  - Table `workout_sessions`: Session summaries, volume, form accuracy %, adaptive rest extensions, and coach feedback.
-  - Table `local_vitals_telemetry`: High-frequency Presage rPPG time-series (BPM, HRV ms, breathing rate, HR zones, signal confidence).
-  - Table `local_biomechanical_faults`: MediaPipe joint angle logs and biomechanical error timestamps.
-- **`WorkoutRepository`**: Reactive SQLite repository exposing local queries and telemetry flows.
+> **Wellness & Fitness Disclaimer**: FitLens is strictly a non-medical fitness, exercise form, and wellness biofeedback application. It is **not a medical device** and does not diagnose, treat, cure, or prevent any disease or support medical decision-making.
 
 ---
 
-## 🔐 Security & Credential Management
+## 🌟 Real-Time Response to Live Presage SmartSpectra Signals
 
-### Zero AI Key Management (Firebase AI Logic + App Check)
-- **No `GEMINI_API_KEY` or `GOOGLE_API_KEY` strings** in source code, build configs, or compiled APK binaries.
-- Firebase App Check attests app authenticity via Google Play Integrity (production) and Debug Provider (development/emulators).
-- Google Cloud backend enforces quotas and identity strictly via Firebase project attestation.
+FitLens owns a single CameraX pipeline through [`DualStreamAnalyzer`](app/src/main/kotlin/com/fitlens/app/camera/DualStreamAnalyzer.kt)—eliminating `CameraDevice` hardware lock contention between MediaPipe and SmartSpectra—and feeds frames headlessly via `SmartSpectraSdk.shared.useCustomInput()`.
 
-### Presage SDK Key Management (Secrets Gradle Plugin)
-- Bundled at build time via `com.google.android.libraries.mapsplatform.secrets-gradle-plugin`.
-- Real key stored in git-ignored `secrets.properties`:
-  ```properties
-  PRESAGE_API_KEY=your_actual_presage_key_here
-  ```
-- Public fallback stored in committed `local.defaults.properties`:
-  ```properties
-  PRESAGE_API_KEY=PLACEHOLDER_RUN_SETUP
-  ```
-- Accessible in Kotlin code via `com.fitlens.app.BuildConfig.PRESAGE_API_KEY`.
-
-### Firebase Project Configuration
-
-Firebase AI Logic and App Check use the official Firebase Android SDK. Download
-the app configuration from **Firebase Console → Project settings → Your apps**
-and save it as `app/google-services.json`; this file is git-ignored. Configure
-the same file contents as the `GOOGLE_SERVICES_JSON` repository secret for CI/CD.
-Debug builds use the App Check debug provider, while release builds use Play
-Integrity. Register the release SHA-256 fingerprint in Firebase App Check before
-publishing a release.
-
----
-
-## 🔬 SmartSpectra Android SDK Integration Reference
-
-Based on official Presage SmartSpectra documentation:
-
-| Document | Topic | FitLens Integration |
+| Live SmartSpectra Signal | SDK Metric Group | Real-Time FitLens Experience Response |
 |---|---|---|
-| [API Reference](https://smartspectra.presagetech.com/docs/android/api-reference/) | `SmartSpectraSdk` lifecycle & config | `PresageManager.initializeSdk()` configures `SmartSpectraSdk.shared.config` (API key, metrics, image output) from `MainActivity.onCreate()`; `sdk.start()`/`sdk.stop()` are driven by the Start/Stop button and `onPause()` |
-| [Headless Mode](https://smartspectra.presagetech.com/docs/android/headless-mode/) | `useCustomInput()` & `sendFrame()` | `CustomInput` handle cached once per session; `ImageProxy` frames submitted via `CustomInput.sendFrame()` without camera lock contention |
-| [Metrics](https://smartspectra.presagetech.com/docs/android/metrics/) | `cardioMetrics` & `breathingMetrics` | Configures pulse rate (BPM), HRV (ms), arterial pressure trace waveform, and respiratory rate; all arterial pressure samples collected for waveform display |
-| [LLM Insights](https://smartspectra.presagetech.com/docs/android/llm-insights/) | `sdk.insight` LiveData | **Not currently consumed** — no code observes `sdk.insight`; only `metrics`, `error`, and `validationStatus` LiveData are wired in `WorkoutViewModel` |
-| [Option 2: OAuth](https://smartspectra.presagetech.com/docs/android/option-2-oauth/) | Production Auth Configuration | `presage_oauth_config.xml` exists as a resource but is **not referenced** by any code or manifest entry — the active auth path is the build-time `PRESAGE_API_KEY` |
-| [Headless Testing in CI](https://smartspectra.presagetech.com/docs/android/headless-testing-in-ci/) | `@OptIn(SmartSpectraTestingApi::class)` | Automated headless verification using pre-recorded video frames |
-| [Migration Guide](https://smartspectra.presagetech.com/docs/android/migration-guide/) | v3.4.0+ Architectural Standards | Implements current module naming and frame submission contracts |
-
-### Key Integration Improvements
-
-- **CustomInput handle caching**: The `CustomInput` handle from `useCustomInput()` is now cached once per SDK session and reused across all frames, rather than being obtained on every frame.
-- **DualStreamAnalyzer completeness**: `DualStreamAnalyzer` now correctly dispatches frames to both SmartSpectra (vitals) and MediaPipe (pose) — previously it only forwarded to SmartSpectra.
-- **SDK error & validation observation**: `WorkoutViewModel` now observes `sdk.error` and `sdk.validationStatus` LiveData for proper error handling and user guidance.
-- **Clean session lifecycle**: `resetCustomInput()` is called after `sdk.stop()` to ensure the next session gets a fresh `CustomInput` handle.
-- **MediaPipe frame analysis**: `PoseLandmarkManager.analyzeFrame()` converts `ImageProxy` to `Bitmap` and runs the MediaPipe `PoseLandmarker` for real-time pose detection.
+| **Pulse Rate & Relative Arterial Pressure Trace** | `SmartSpectraConfig.cardioMetrics` | Classifies live exertion across **5 personalized Karvonen Heart Rate Reserve (HRR)** zones ([`UserProfile`](app/src/main/kotlin/com/fitlens/app/data/profile/UserProfile.kt)), dynamically extends inter-set recovery (`+15s` / `+30s`) via [`calculateAdaptiveRest`](app/src/main/kotlin/com/fitlens/app/ai/FitnessTools.kt) when HR remains elevated, renders a live pulse waveform, and measures **HR Recovery Drop** during cooldown. |
+| **Breathing Rate & Chest / Abdomen Traces** | `SmartSpectraConfig.breathingMetrics` | Triggers an **Animated Coherent Recovery Breathing Pacer** (`4s Inhale / 6s Exhale` expanding ring) in [`WorkoutSessionScreen`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutSessionScreen.kt) during rest intervals and cooldown whenever respiratory rate rises (`≥ 21 brpm`), guiding athletes back toward calm nasal breathing. |
+| **Heart Rate Variability (HRV RMSSD)** | `SmartSpectraConfig.cardioMetrics` | Surfaces a live **Autonomic Readiness & Exertion Load** badge (`High Readiness`, `Balanced Load`, `High Exertion Load`) in the HUD and longitudinal readiness scoring. |
+| **Facial Expressions** | `MetricType.EXPRESSIONS` | Detects facial grimace/tension (`Angry`, `Fear`, `Disgust`, `Sad`, `Strain`) vs. composed effort (`Happy`, `Neutral`) via [`evaluateHolisticBiofeedback`](app/src/main/kotlin/com/fitlens/app/ai/FitnessTools.kt), coaching athletes to unclench their jaw, drop their shoulders, and exhale through sticking points. |
+| **Validation Status & On-Demand Insights** | `sdk.validationStatus` & `sdk.insight` | Displays live framing/lighting hints directly in the dashboard and workout HUD, and triggers natural-language wellness summaries via `sdk.requestInsight(...)`. |
 
 ---
 
-## 🧪 Day 1 Hard Gate Verification Checklist
+## 🔐 Consent, Privacy & Responsible Data Handling
 
-See detailed execution runbook: [**`docs/DAY_1_HARD_GATE_RUNBOOK.md`**](file:///home/veldrine/FitLens/docs/DAY_1_HARD_GATE_RUNBOOK.md)  
-See submission pitch & demo script: [**`docs/COMPETITION_SUBMISSION_GUIDE.md`**](file:///home/veldrine/FitLens/docs/COMPETITION_SUBMISSION_GUIDE.md)
-
-| Gate | Component | Test Criteria | Status Target |
-|---|---|---|---|
-| 1 | **Presage SDK** | `useCustomInput()` extracts valid pulse/HR data from live CameraX or recorded video stream | Valid HR reading |
-| 2 | **MediaPipe** | `PoseLandmarker` emits 33 3D landmarks concurrently on CameraX stream | Form landmark feed active |
-| 3 | **ADK Agent** | Minimal `LlmAgent` executes `@Tool` method via `InMemoryRunner` without client API keys | Plan generated |
-| 4 | **Firebase App Check** | Attestation succeeds with valid provider and fails when App Check is disabled | Identity attested |
-| 5 | **Secrets Plugin** | `BuildConfig.PRESAGE_API_KEY` resolves properly; `secrets.properties` absent from git | No secrets in git |
+- **Explicit Pre-Capture Camera Consent**: Camera preview and SmartSpectra frame processing remain **completely disabled** until the user reviews and accepts [`SensingConsentDialog`](app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt). Consent can be revoked anytime in **Profile, Zones & Privacy**.
+- **Volatile In-Memory Video Processing**: Camera frames (`YUV_420_888`) are processed strictly in volatile RAM on-device by MediaPipe and SmartSpectra and immediately closed. Video frames are **never** written to disk or transmitted over the network.
+- **100% Local SQLite Health Vault (`fitlens_health_sqlite.db`)**:
+  - Session summaries (`workout_sessions`), vitals telemetry (`local_vitals_telemetry`), and joint fault episodes (`local_biomechanical_faults`) are stored strictly locally via Room/SQLite—zero cloud health sync.
+  - **User Retention, Export & One-Tap Deletion**: Data remains on-device under user control. Users can export their vault to local JSON ([`LocalDataExportManager`](app/src/main/kotlin/com/fitlens/app/data/LocalDataExportManager.kt)) or permanently wipe all stored records in one tap (**Delete All Local Vault Data** in [`ProfileAndPrivacySheet`](app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt) or [`WorkoutAnalyticsScreen`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutAnalyticsScreen.kt)).
+- **Presage SmartSpectra Network Gating & Telemetry Opt-Out**:
+  - All physiological signal extraction runs **on-device** inside the SmartSpectra SDK. Network calls to Presage are used only for API key authentication and subscription gating.
+  - SmartSpectra's optional aggregate per-session diagnostic telemetry (which contains **no raw video frames, no vital sign values, and no user or device identifiers**) is transparently disclosed and can be toggled off (`sdk.config.enableTelemetry = false`) in [`ConsentAndPrivacySheet`](app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt).
+- **Zero Client AI Keys & 100% Offline Edge AI Option**:
+  - Biometric vitals are **never** sent to cloud AI services.
+  - Optional workout routine and 4-week mesocycle generation uses **Firebase AI Logic + App Check** (zero `GEMINI_API_KEY` in source or APK, sending only non-biometric preferences: goal, experience, equipment, duration), or can be locked to **100% Offline On-Device Edge AI** ([`LocalEdgeEngine`](app/src/main/kotlin/com/fitlens/app/ai/adk/LocalEdgeEngine.kt)).
 
 ---
 
-## 📁 Project Structure
+## 🏗️ Architecture Overview
 
-```
-FitLens/
-├── app/
-│   ├── src/
-│   │   ├── main/
-│   │   │   ├── kotlin/com/fitlens/app/
-│   │   │   │   ├── ai/
-│   │   │   │   │   ├── adk/
-│   │   │   │   │   │   ├── AdkAgentArchitecture.kt# LlmAgent, InMemoryRunner, Firebase AI Logic & edge adapter
-│   │   │   │   │   │   ├── AdkAnnotations.kt      # @Tool and @Param annotations
-│   │   │   │   │   │   └── LocalEdgeEngine.kt     # Deterministic on-device @Tool discovery & dispatch
-│   │   │   │   │   ├── firebase/
-│   │   │   │   │   │   └── FirebaseAiService.kt    # Firebase AI Logic generative model wrapper
-│   │   │   │   │   ├── FitnessCoachAgent.kt       # ADK LlmAgent orchestration
-│   │   │   │   │   └── FitnessTools.kt            # @Tool functions (Plan, Analysis, Adaptive Rest, Fatigue, Mesocycle)
-│   │   │   │   ├── audio/
-│   │   │   │   │   └── FitLensAudioCoach.kt       # Android TTS hands-free vocal coaching
-│   │   │   │   ├── camera/
-│   │   │   │   │   ├── CameraPreviewView.kt       # Lifecycle-aware CameraX surface
-│   │   │   │   │   ├── DualStreamAnalyzer.kt      # Concurrent MediaPipe & Presage frame dispatcher
-│   │   │   │   │   └── SkeletonOverlay.kt         # Jetpack Compose 33-point skeletal overlay
-│   │   │   │   ├── data/
-│   │   │   │   │   ├── dao/WorkoutDao.kt          # Local SQLite DAO (Sessions, Vitals, Faults)
-│   │   │   │   │   ├── model/WorkoutEntities.kt   # Local SQLite Tables (Zero cloud health sync)
-│   │   │   │   │   ├── privacy/LocalHealthDataPrivacyEnforcer.kt # Local-only storage audit
-│   │   │   │   │   ├── profile/UserProfile.kt     # DataStore & Karvonen Heart Rate Reserve zones
-│   │   │   │   │   ├── LocalDataExportManager.kt  # On-device JSON export (GDPR data portability)
-│   │   │   │   │   ├── WorkoutDatabase.kt         # Local SQLite DB (fitlens_health_sqlite.db)
-│   │   │   │   │   └── WorkoutRepository.kt       # On-device health repository
-│   │   │   │   ├── testing/
-│   │   │   │   │   └── HeadlessVideoFeeder.kt     # Automated Day 1 Hard Gate video feed runner
-│   │   │   │   ├── ui/
-│   │   │   │   │   ├── WorkoutAnalyticsScreen.kt  # Biomechanical stability & vitals trends
-│   │   │   │   │   ├── WorkoutDestination.kt      # Workout flow: setup -> session -> summary wiring
-│   │   │   │   │   ├── WorkoutSessionScreen.kt    # Live workout HUD & feedback
-│   │   │   │   │   ├── WorkoutSummaryScreen.kt    # Post-session insights & metrics
-│   │   │   │   │   └── WorkoutViewModel.kt        # MVI/MVVM Session coordinator
-│   │   │   │   ├── pose/
-│   │   │   │   │   └── PoseLandmarkManager.kt     # Angles, rep state machine & valgus detection
-│   │   │   │   ├── vitals/
-│   │   │   │   │   ├── PresageFrameAnalyzer.kt    # CameraX ImageAnalysis + rPPG HR zones
-│   │   │   │   │   ├── PresageManager.kt          # BuildConfig Presage key resolution
-│   │   │   │   │   └── PulseWaveformView.kt       # rPPG arterial-pressure waveform composable
-│   │   │   │   ├── workout/
-│   │   │   │   │   ├── ProgressAnalyzer.kt        # Progressive overload calculator
-│   │   │   │   │   └── WorkoutManager.kt          # Active workout state machine
-│   │   │   │   ├── FitLensApp.kt                  # App Check (Play Integrity / Debug) init
-│   │   │   │   └── MainActivity.kt                # NavHost: vitals dashboard, workout, summary, analytics
-│   │   │   └── AndroidManifest.xml
-│   │   └── test/
-│   │       └── kotlin/com/fitlens/app/
-│   │           └── FitnessCoachTest.kt            # Comprehensive unit test suite (21 tests)
-│   ├── build.gradle.kts                           # App dependencies, secrets config, Room, ADK, DataStore
-│   └── proguard-rules.pro                         # Proguard/R8 rules for ADK, Room, MediaPipe & SmartSpectra
-├── docs/
-│   ├── DAY_1_HARD_GATE_RUNBOOK.md                 # Step-by-step gate execution guide
-│   └── COMPETITION_SUBMISSION_GUIDE.md            # Hackathon pitch & judge demo script
-├── scripts/
-│   └── verify_fitlens.sh                          # Automated 5-stage architectural verification script
-├── .github/workflows/android-ci.yml               # PR/main verification, tests, lint & APK build
-├── .github/workflows/android-cd.yml               # Version-tagged APK/AAB GitHub Releases
-├── build.gradle.kts                               # Root plugins (Secrets, KSP, Google Services)
-├── local.defaults.properties                      # Committed placeholder secrets
-├── secrets.properties                             # Git-ignored developer secrets
-└── .gitignore
-```
+1. **Presentation Layer (Jetpack Compose & Material 3)**:
+   - [`MainActivity`](app/src/main/kotlin/com/fitlens/app/MainActivity.kt): Consent-gated Vitals Dashboard displaying live CameraX preview, Pulse + Karvonen Zone, Breathing Rate, HRV RMSSD, Facial Expression, 3 real-time waveforms (Arterial Pressure, Chest, Abdomen), SmartSpectra Insights, and Profile/Privacy controls.
+   - [`WorkoutDestination`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutDestination.kt): Pre-workout configurator supporting both **Quick Exercise** (Bodyweight Squats, Push-Ups, Lunges, and **Time-Based Isometric Plank**, plus optional Warmup/Cooldown) and **ADK AI Coach Plan & 4-Week Mesocycle Generator**.
+   - [`WorkoutSessionScreen`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutSessionScreen.kt): Real-time HUD with front/rear camera switching, `FILL_CENTER`-aligned [`SkeletonOverlay`](app/src/main/kotlin/com/fitlens/app/camera/SkeletonOverlay.kt) with joint fault halos, 4-signal SmartSpectra biofeedback bar, animated **Coherent Breathing Pacer**, TTS voice coaching ([`FitLensAudioCoach`](app/src/main/kotlin/com/fitlens/app/audio/FitLensAudioCoach.kt)), and live simulation controls for emulator/judge testing.
+   - [`WorkoutSummaryScreen`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutSummaryScreen.kt) & [`WorkoutAnalyticsScreen`](app/src/main/kotlin/com/fitlens/app/ui/WorkoutAnalyticsScreen.kt): Post-workout biomechanics + vitals evaluation, readiness scoring, SQLite-computed per-joint fault breakdown, JSON export, and one-tap vault deletion.
+2. **Sensing & Pose Intelligence**:
+   - [`PoseLandmarkManager`](app/src/main/kotlin/com/fitlens/app/pose/PoseLandmarkManager.kt): MediaPipe `PoseLandmarker` running in **`RunningMode.VIDEO`** with sensor rotation (`0°/90°/180°/270°`) and front-camera mirroring normalization into downscaled full-color `ARGB_8888` bitmaps (reusing scratch buffers for zero per-frame allocations) and **EMA temporal landmark smoothing**.
+   - [`PresageFrameAnalyzer`](app/src/main/kotlin/com/fitlens/app/vitals/PresageFrameAnalyzer.kt) & [`PresageManager`](app/src/main/kotlin/com/fitlens/app/vitals/PresageManager.kt): Headless `CustomInput` frame ingestion, Karvonen HRR classification, and runtime telemetry configuration.
+3. **Workout & ADK Coaching Engine**:
+   - [`WorkoutManager`](app/src/main/kotlin/com/fitlens/app/workout/WorkoutManager.kt): Thread-safe state machine (`IDLE` ➔ `WARMUP` ➔ `ACTIVE_SET` ⇄ `REST_INTERVAL` ➔ `COOLDOWN` ➔ `COMPLETED`) supporting multi-exercise routines, timed isometric Plank holds, 3-fault biomechanical safety set halting, and vitals-guided adaptive rest.
+   - [`FitnessCoachAgent`](app/src/main/kotlin/com/fitlens/app/ai/FitnessCoachAgent.kt), [`FitnessTools`](app/src/main/kotlin/com/fitlens/app/ai/FitnessTools.kt), & [`LocalEdgeEngine`](app/src/main/kotlin/com/fitlens/app/ai/adk/LocalEdgeEngine.kt): Hybrid Cloud + deterministic sub-10ms On-Device Edge `@Tool` dispatcher.
 
-## 🚀 CI/CD
+---
 
-Pull requests and pushes to `main` or `master` run the architectural checks, unit
-tests, Android lint, and release APK build. To publish a release, create and push
-a semantic version tag:
+## 🛠️ Setup & Testing Instructions (For Judges & Developers)
 
+### Prerequisites
+- **Android Studio Ladybug (2024.2+)** or **JDK 17** with **Android SDK Platform 36**
+- An Android phone running **Android 9.0+ (API 28+, ARM64/ARM32)** for live camera rPPG + pose sensing *(or an emulator using the built-in Headless Smoke Test & Live Simulation Controls — no login credentials required!)*
+
+### 1. Clone the Repository
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git clone https://github.com/Tech-Vexy/FitLens.git
+cd FitLens
 ```
 
-The CD workflow builds two signed release APKs only: `armeabi-v7a` (ARM32) and
-`arm64-v8a` (ARM64). No universal, x86, or x86_64 APK is produced. Configure
-these repository secrets for production builds:
+### 2. Add Your Presage SmartSpectra API Key
+1. Register for a free Presage developer key at [physiology.presagetech.com/auth/register](https://physiology.presagetech.com/auth/register).
+2. Create a git-ignored `secrets.properties` file in the project root:
+   ```properties
+   PRESAGE_API_KEY=your_presage_smartspectra_api_key
+   ```
+   *(If `secrets.properties` is omitted, Gradle falls back to `local.defaults.properties` so the project still builds cleanly and all simulation / automated smoke-test features remain testable.)*
 
-| Secret | Purpose |
-|---|---|
-| `ANDROID_KEYSTORE_BASE64` | Base64-encoded release keystore |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
-| `ANDROID_KEY_ALIAS` | Signing key alias |
-| `ANDROID_KEY_PASSWORD` | Signing key password |
-| `PRESAGE_API_KEY` | Presage SDK credential |
-| `GOOGLE_SERVICES_JSON` | Firebase app configuration |
+### 3. (Optional) Firebase AI Logic Configuration
+- To enable cloud Gemini routine generation via Firebase App Check, place `app/google-services.json` from Firebase Console.
+- **Zero-setup fallback**: If `app/google-services.json` is omitted or the device is offline, `FitnessCoachAgent` automatically routes all workout plans and 4-week mesocycles locally via [`LocalEdgeEngine`](app/src/main/kotlin/com/fitlens/app/ai/adk/LocalEdgeEngine.kt).
+
+### 4. Run Automated Architecture & Unit Verification
+```bash
+./scripts/verify_fitlens.sh
+```
+
+### 5. Build & Install Debug APK
+```bash
+./gradlew installDebug
+```
+
+---
+
+## 📄 Submission & Verification Docs
+- [**Official DEV Challenge Submission Post Draft (`docs/DEV_SUBMISSION_POST.md`)**](docs/DEV_SUBMISSION_POST.md)
+- [**Judge Demo Walkthrough & Pitch Guide (`docs/COMPETITION_SUBMISSION_GUIDE.md`)**](docs/COMPETITION_SUBMISSION_GUIDE.md)
+- [**Day 1 Hard Gate Verification Runbook (`docs/DAY_1_HARD_GATE_RUNBOOK.md`)**](docs/DAY_1_HARD_GATE_RUNBOOK.md)

@@ -2,11 +2,12 @@ package com.fitlens.app
 
 import com.fitlens.app.ai.FitnessCoachAgent
 import com.fitlens.app.ai.FitnessTools
+import com.fitlens.app.ai.adk.AdkAuthMode
 import com.fitlens.app.data.model.WorkoutSessionEntity
+import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.pose.DeviationSeverity
 import com.fitlens.app.pose.LandmarkPoint
 import com.fitlens.app.pose.PoseLandmarkManager
-import com.fitlens.app.pose.RepPhase
 import com.fitlens.app.vitals.HeartRateZone
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.workout.ProgressAnalyzer
@@ -32,6 +33,7 @@ class FitnessCoachTest {
         assertEquals(45, plan.targetDurationMinutes)
         assertEquals(75, plan.recommendedRestIntervalSeconds)
         assertTrue(plan.targetExercises.contains("Barbell Squat"))
+        assertTrue(plan.aiCoachRationale.isNotBlank())
     }
 
     @Test
@@ -53,7 +55,6 @@ class FitnessCoachTest {
     fun testAdaptiveRestCalculation() {
         val tools = FitnessTools()
 
-        // Test with elevated HR (> 135 bpm)
         val elevatedRest = tools.calculateAdaptiveRest(
             baseRestSeconds = 45,
             currentHeartRateBpm = 142.0,
@@ -63,7 +64,6 @@ class FitnessCoachTest {
         assertEquals(75, elevatedRest.adjustedRestSeconds)
         assertTrue(elevatedRest.reason.contains("Extending rest by 30s"))
 
-        // Test with recovered HR (90 bpm)
         val normalRest = tools.calculateAdaptiveRest(
             baseRestSeconds = 45,
             currentHeartRateBpm = 88.0,
@@ -77,7 +77,6 @@ class FitnessCoachTest {
     fun testBiomechanicalFatigueEvaluation() {
         val tools = FitnessTools()
 
-        // 3 consecutive deviations should advise halting the set
         val criticalCheck = tools.evaluateBiomechanicalFatigue(
             consecutiveDeviations = 3,
             currentSetRepsCompleted = 7,
@@ -86,7 +85,6 @@ class FitnessCoachTest {
         assertTrue(criticalCheck.shouldHaltSet)
         assertTrue(criticalCheck.correctiveAction.contains("Stop set immediately"))
 
-        // 0 deviations should allow continuing
         val cleanCheck = tools.evaluateBiomechanicalFatigue(
             consecutiveDeviations = 0,
             currentSetRepsCompleted = 5,
@@ -99,7 +97,6 @@ class FitnessCoachTest {
     fun testPoseAngleCalculation() {
         val manager = PoseLandmarkManager()
 
-        // Right angle triangle: (0, 1) -> (0, 0) -> (1, 0) => 90 degrees
         val a = LandmarkPoint(0f, 1f, 0f)
         val b = LandmarkPoint(0f, 0f, 0f)
         val c = LandmarkPoint(1f, 0f, 0f)
@@ -107,7 +104,6 @@ class FitnessCoachTest {
         val angle = manager.calculateAngle(a, b, c)
         assertEquals(90.0, angle, 0.5)
 
-        // Straight line: (0, 1) -> (0, 0) -> (0, -1) => 180 degrees
         val d = LandmarkPoint(0f, -1f, 0f)
         val straightAngle = manager.calculateAngle(a, b, d)
         assertEquals(180.0, straightAngle, 0.5)
@@ -118,13 +114,12 @@ class FitnessCoachTest {
         val manager = PoseLandmarkManager()
         manager.setExercise("Squats")
 
-        // Knees caving in: knee width is much narrower than ankle width at squat depth (< 120 deg)
         val valgusLandmarks = mapOf(
             PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.40f, 0.50f, 0f),
-            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.48f, 0.70f, 0f), // caved inward
+            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.48f, 0.70f, 0f),
             PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.35f, 0.80f, 0f),
             PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.60f, 0.50f, 0f),
-            PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.52f, 0.70f, 0f), // caved inward
+            PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.52f, 0.70f, 0f),
             PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.65f, 0.80f, 0f)
         )
 
@@ -135,22 +130,34 @@ class FitnessCoachTest {
     }
 
     @Test
-    fun testPlankSaggingDetection() {
+    fun testPlankSaggingAndPikingDetection() {
         val manager = PoseLandmarkManager()
         manager.setExercise("Plank")
 
-        // Hips sagging: shoulder-hip-ankle angle < 155 degrees
+        // Hips sagging below shoulder-ankle midpoint: CRITICAL
         val saggingPlankLandmarks = mapOf(
             PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.20f, 0.40f, 0f),
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.65f, 0f), // sagged down
+            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.65f, 0f),
             PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.85f, 0.45f, 0f)
         )
 
-        val frame = manager.analyzeLandmarks(saggingPlankLandmarks)
-        val hipDeviations = frame.activeDeviations.filter { it.jointName == "Hips" }
+        val sagFrame = manager.analyzeLandmarks(saggingPlankLandmarks)
+        val hipDeviations = sagFrame.activeDeviations.filter { it.jointName == "Hips" }
         assertEquals(1, hipDeviations.size)
         assertEquals(DeviationSeverity.CRITICAL, hipDeviations.first().severity)
         assertTrue(hipDeviations.first().message.contains("Hips sagging"))
+
+        // Hips piked high above shoulder-ankle midpoint: WARNING
+        val pikedPlankLandmarks = mapOf(
+            PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.20f, 0.55f, 0f),
+            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.28f, 0f),
+            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.85f, 0.55f, 0f)
+        )
+        val pikeFrame = manager.analyzeLandmarks(pikedPlankLandmarks)
+        val pikeDeviations = pikeFrame.activeDeviations.filter { it.jointName == "Hips" }
+        assertEquals(1, pikeDeviations.size)
+        assertEquals(DeviationSeverity.WARNING, pikeDeviations.first().severity)
+        assertTrue(pikeDeviations.first().message.contains("piked"))
     }
 
     @Test
@@ -158,7 +165,6 @@ class FitnessCoachTest {
         val manager = PoseLandmarkManager()
         manager.setExercise("Lunges")
 
-        // Front knee over-flexed (< 75 deg): knee driven ahead of the trailing ankle
         val deepLungeLandmarks = mapOf(
             PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.30f, 0.55f, 0f),
             PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.55f, 0.55f, 0f),
@@ -203,7 +209,6 @@ class FitnessCoachTest {
     fun testPresageHeartRateZones() {
         val analyzer = PresageFrameAnalyzer()
 
-        // Default profile: resting 65 bpm, max 190 bpm -> 50/65/80/90% HRR at 127.5/146.25/165/177.5 bpm
         analyzer.updateVitalsReading(hr = 85.0, hrv = 60.0, breathingRate = 14.0, confidence = 0.9f)
         assertEquals(HeartRateZone.RESTING, analyzer.vitalsFlow.value.heartRateZone)
 
@@ -245,7 +250,6 @@ class FitnessCoachTest {
     fun testSmartSpectraHeadlessConfigurationAndInsights() {
         val analyzer = PresageFrameAnalyzer()
 
-        // Test Headless Mode exertion simulation (SmartSpectraTestingApi workflow)
         analyzer.simulateExerciseExertion(0.85f)
         val reading = analyzer.vitalsFlow.value
 
@@ -253,41 +257,39 @@ class FitnessCoachTest {
         assertTrue(reading.isReliable)
         assertNotNull(reading.smartSpectraLlmInsight)
         assertTrue(reading.smartSpectraLlmInsight!!.contains("SmartSpectra"))
+        assertEquals("Strain", reading.facialExpression)
+        assertTrue(reading.chestBreathingTrace.isNotEmpty())
         assertEquals(HeartRateZone.ANAEROBIC, reading.heartRateZone)
     }
 
     @Test
     fun testPersonalizedKarvonenHeartRateZones() {
-        // User age 30, resting HR 60, max HR 190 => HRR = 130
-        val profile = com.fitlens.app.data.profile.UserProfile(
+        val profile = UserProfile(
             age = 30,
             restingHeartRate = 60.0,
             maxHeartRate = 190.0
         )
 
-        // 80 bpm => (80 - 60) / 130 = 0.15 intensity (< 0.50) -> RESTING
         assertEquals(HeartRateZone.RESTING, profile.getHeartRateZone(80.0))
-
-        // 135 bpm => (135 - 60) / 130 = 0.57 intensity (0.50 - 0.65) -> WARMUP
         assertEquals(HeartRateZone.WARMUP, profile.getHeartRateZone(135.0))
-
-        // 155 bpm => (155 - 60) / 130 = 0.73 intensity (0.65 - 0.80) -> AEROBIC
         assertEquals(HeartRateZone.AEROBIC, profile.getHeartRateZone(155.0))
-
-        // 172 bpm => (172 - 60) / 130 = 0.86 intensity (0.80 - 0.90) -> ANAEROBIC
         assertEquals(HeartRateZone.ANAEROBIC, profile.getHeartRateZone(172.0))
-
-        // 185 bpm => (185 - 60) / 130 = 0.96 intensity (> 0.90) -> MAX
         assertEquals(HeartRateZone.MAX, profile.getHeartRateZone(185.0))
+
+        // Verify consent-first default & Karvonen threshold table
+        assertFalse(profile.hasAcceptedSensingConsent)
+        val thresholds = profile.getKarvonenZoneThresholds()
+        assertEquals(5, thresholds.size)
+        assertEquals(HeartRateZone.RESTING, thresholds.first().first)
+        assertEquals(HeartRateZone.MAX, thresholds.last().first)
     }
 
     @Test
     fun testHybridAgentRouting() = runBlocking {
         val agent = FitnessCoachAgent(
-            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+            initialAuthMode = AdkAuthMode.ON_DEVICE_EDGE
         )
 
-        // Edge execution target test
         val edgeRest = agent.calculateAdaptiveRest(
             baseRestSeconds = 45,
             currentHeartRateBpm = 145.0,
@@ -296,7 +298,6 @@ class FitnessCoachTest {
         assertTrue(edgeRest.isExtended)
         assertEquals(75, edgeRest.adjustedRestSeconds)
 
-        // Cloud execution target test
         val cloudPlan = agent.requestWorkoutPlan(
             goal = "Mobility",
             experience = "intermediate",
@@ -305,19 +306,23 @@ class FitnessCoachTest {
         )
         assertNotNull(cloudPlan)
         assertEquals(25, cloudPlan.targetDurationMinutes)
+        assertTrue(cloudPlan.aiCoachRationale.isNotBlank())
     }
 
     @Test
-    fun testAdkAgentWithFirebaseAiLogic() = runBlocking {
+    fun testAdkAgentWithFirebaseAiLogicAndModeSwitch() = runBlocking {
         val firebaseAgent = FitnessCoachAgent(
-            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.FIREBASE_AI_LOGIC
+            initialAuthMode = AdkAuthMode.FIREBASE_AI_LOGIC
         )
 
         assertEquals("fitness_coach", firebaseAgent.rootAgent.name)
-        assertEquals(com.fitlens.app.ai.adk.AdkAuthMode.FIREBASE_AI_LOGIC, firebaseAgent.rootAgent.model.authMode)
+        assertEquals(AdkAuthMode.FIREBASE_AI_LOGIC, firebaseAgent.rootAgent.model.authMode)
         assertEquals("gemini-3.8-flash", firebaseAgent.rootAgent.model.modelName)
-
         assertTrue(firebaseAgent.rootAgent.model is com.fitlens.app.ai.adk.FirebaseGeminiAdapter)
+
+        // Switch dynamically to On-Device Edge
+        firebaseAgent.setAuthMode(AdkAuthMode.ON_DEVICE_EDGE)
+        assertEquals(AdkAuthMode.ON_DEVICE_EDGE, firebaseAgent.rootAgent.model.authMode)
     }
 
     @Test
@@ -331,6 +336,7 @@ class FitnessCoachTest {
         assertTrue(methodNamesWithTool.contains("analyzeSession"))
         assertTrue(methodNamesWithTool.contains("calculateAdaptiveRest"))
         assertTrue(methodNamesWithTool.contains("evaluateBiomechanicalFatigue"))
+        assertTrue(methodNamesWithTool.contains("evaluateHolisticBiofeedback"))
     }
 
     @Test
@@ -405,31 +411,20 @@ class FitnessCoachTest {
         assertEquals("Hypertrophy", plan.goal)
         assertEquals(4, plan.totalWeeks)
         assertEquals(4, plan.phases.size)
-
-        // Week 1 should be Accumulation
         assertTrue(plan.phases[0].phaseName.contains("Accumulation"))
         assertEquals(6, plan.phases[0].targetIntensityRpe)
-
-        // Week 3 should be Realization (Peak)
         assertTrue(plan.phases[2].phaseName.contains("Realization"))
         assertEquals(9, plan.phases[2].targetIntensityRpe)
-
-        // Week 4 should be Deload
         assertTrue(plan.phases[3].phaseName.contains("Deload"))
         assertEquals(5, plan.phases[3].targetIntensityRpe)
 
-        // Agent request verification
         val agent = FitnessCoachAgent(
-            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+            initialAuthMode = AdkAuthMode.ON_DEVICE_EDGE
         )
         val agentPlan = agent.requestMesocyclePlan("Strength", 4, 3)
         assertNotNull(agentPlan)
         assertEquals(4, agentPlan.totalWeeks)
     }
-
-    // ------------------------------------------------------------------
-    // LocalEdgeEngine — deterministic on-device ADK tool routing
-    // ------------------------------------------------------------------
 
     @Test
     fun testLocalEdgeEngineRoutesWorkoutPlan() {
@@ -451,7 +446,6 @@ class FitnessCoachTest {
             prompt = "Calculate adaptive rest for 45 seconds at heart rate 155 bpm"
         )
         assertTrue(response.contains("Rest adjusted"))
-        // HR 155 - resting 70 = 85 delta > 65 -> extended by 30s
         assertTrue(response.contains("75s"))
     }
 
@@ -477,6 +471,17 @@ class FitnessCoachTest {
     }
 
     @Test
+    fun testLocalEdgeEngineRoutesHolisticBiofeedback() {
+        val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
+        val response = engine.generate(
+            toolObjects = listOf(FitnessTools()),
+            prompt = "Evaluate holistic biofeedback at heart rate 162 bpm and breathing 26 brpm with strain expression"
+        )
+        assertTrue(response.contains("Recovery Breathing"))
+        assertTrue(response.contains("unclench your jaw"))
+    }
+
+    @Test
     fun testLocalEdgeEngineFallbackOnNoMatch() {
         val engine = com.fitlens.app.ai.adk.LocalEdgeEngine()
         val response = engine.generate(
@@ -489,13 +494,133 @@ class FitnessCoachTest {
     @Test
     fun testEdgeAdapterExecuteReturnsRealToolResult() = runBlocking {
         val agent = FitnessCoachAgent(
-            initialAuthMode = com.fitlens.app.ai.adk.AdkAuthMode.ON_DEVICE_EDGE
+            initialAuthMode = AdkAuthMode.ON_DEVICE_EDGE
         )
         val response = agent.runner.execute(
             "Evaluate biomechanical fatigue with 3 consecutive deviations at rep 8 of 10"
         )
-        // Edge path must produce a real tool result, not the old placeholder string.
         assertFalse(response.contains("Local edge inference"))
         assertTrue(response.contains("Set halted") || response.contains("Form check"))
+    }
+
+    // ------------------------------------------------------------------
+    // New Upgrades: Camera Rotation/Mirroring, EMA Smoothing, Biofeedback & Routines
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testSensorRotationAndFrontCameraMirroring() {
+        // 4x2 sensor image rotated 270 deg CW -> upright 2x4 output
+        // Without mirror: upright top-left (0, 0) comes from sensor top-right (3, 0)
+        val unmirrored270 = PoseLandmarkManager.mapOutputToSensorCoords(
+            ox = 0, oy = 0, outW = 2, outH = 4, stride = 1,
+            srcW = 4, srcH = 2, rotationDegrees = 270, mirrorHorizontally = false
+        )
+        assertEquals(3 to 0, unmirrored270)
+
+        // With front-camera mirror: upright top-left (ox=0 -> unmirrored ox=1, oy=0) comes from (3, 1)
+        val mirrored270 = PoseLandmarkManager.mapOutputToSensorCoords(
+            ox = 0, oy = 0, outW = 2, outH = 4, stride = 1,
+            srcW = 4, srcH = 2, rotationDegrees = 270, mirrorHorizontally = true
+        )
+        assertEquals(3 to 1, mirrored270)
+
+        // 90 deg CW without mirror: upright top-right (ox=1, oy=0) comes from sensor top-left (0, 0)
+        val unmirrored90 = PoseLandmarkManager.mapOutputToSensorCoords(
+            ox = 1, oy = 0, outW = 2, outH = 4, stride = 1,
+            srcW = 4, srcH = 2, rotationDegrees = 90, mirrorHorizontally = false
+        )
+        assertEquals(0 to 0, unmirrored90)
+    }
+
+    @Test
+    fun testLandmarkTemporalSmoothing() {
+        val manager = PoseLandmarkManager()
+        val first = mapOf(PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.20f, 0.50f, 0f))
+        val second = mapOf(PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.60f, 0.50f, 0f))
+
+        val s1 = manager.smoothLandmarks(first, alpha = 0.5f)
+        assertEquals(0.20f, s1[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
+
+        val s2 = manager.smoothLandmarks(second, alpha = 0.5f)
+        assertEquals(0.40f, s2[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
+
+        // Empty landmarks reset temporal smoothing buffer cleanly
+        assertTrue(manager.smoothLandmarks(emptyMap()).isEmpty())
+        val afterReset = manager.smoothLandmarks(second, alpha = 0.5f)
+        assertEquals(0.60f, afterReset[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
+    }
+
+    @Test
+    fun testHolisticMultiSignalBiofeedbackTool() {
+        val tools = FitnessTools()
+        val stressed = tools.evaluateHolisticBiofeedback(
+            heartRateBpm = 165.0,
+            breathingRateBpm = 28.0,
+            hrvRmssdMs = 22.0,
+            facialExpression = "Strain"
+        )
+        assertTrue(stressed.shouldTriggerBreathingPacer)
+        assertEquals(4, stressed.inhaleSeconds)
+        assertEquals(6, stressed.exhaleSeconds)
+        assertNotNull(stressed.expressionCue)
+        assertTrue(stressed.expressionCue!!.contains("unclench your jaw"))
+        assertTrue(stressed.autonomicReadinessLabel.contains("High Exertion"))
+    }
+
+    @Test
+    fun testTimeBasedIsometricPlankLifecycle() {
+        val manager = WorkoutManager()
+        manager.startWorkout(exercise = "Plank", targetReps = 15, totalSets = 1)
+
+        assertTrue(manager.state.value.isIsometricHold)
+        assertEquals(WorkoutPhase.ACTIVE_SET, manager.state.value.phase)
+
+        manager.advanceIsometricHold(10)
+        assertEquals(10, manager.state.value.completedReps)
+        assertEquals(WorkoutPhase.ACTIVE_SET, manager.state.value.phase)
+
+        // Reaching 15s auto-completes the single set -> COMPLETED
+        manager.advanceIsometricHold(5)
+        assertEquals(WorkoutPhase.COMPLETED, manager.state.value.phase)
+        manager.cleanup()
+    }
+
+    @Test
+    fun testMultiExerciseRoutineAndWarmupCooldownTransitions() {
+        val manager = WorkoutManager()
+        manager.startRoutine(
+            exercises = listOf("Bodyweight Squats", "Plank"),
+            targetReps = 10,
+            setsPerExercise = 1,
+            baseRestSeconds = 30,
+            includeWarmup = true,
+            includeCooldown = true
+        )
+
+        assertEquals(WorkoutPhase.WARMUP, manager.state.value.phase)
+        manager.skipWarmup()
+        assertEquals(WorkoutPhase.ACTIVE_SET, manager.state.value.phase)
+        assertEquals("Bodyweight Squats", manager.state.value.exerciseName)
+        assertFalse(manager.state.value.isIsometricHold)
+
+        // Finish Exercise 1 -> enters REST_INTERVAL before Exercise 2
+        manager.completeSet()
+        assertEquals(WorkoutPhase.REST_INTERVAL, manager.state.value.phase)
+        manager.skipRest()
+
+        // Now in Exercise 2 (Plank -> isometric hold automatically enabled!)
+        assertEquals(WorkoutPhase.ACTIVE_SET, manager.state.value.phase)
+        assertEquals("Plank", manager.state.value.exerciseName)
+        assertTrue(manager.state.value.isIsometricHold)
+
+        // Complete Exercise 2 -> enters COOLDOWN
+        manager.completeSet()
+        assertEquals(WorkoutPhase.COOLDOWN, manager.state.value.phase)
+
+        val session = manager.finishWorkout()
+        assertEquals(WorkoutPhase.COMPLETED, manager.state.value.phase)
+        assertTrue(session.exerciseName.contains("Bodyweight Squats"))
+        assertTrue(session.exerciseName.contains("Plank"))
+        manager.cleanup()
     }
 }

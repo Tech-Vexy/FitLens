@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.fitlens.app.vitals.HeartRateZone
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlin.math.roundToInt
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "fitlens_user_profile")
 
@@ -16,7 +17,10 @@ data class UserProfile(
     val restingHeartRate: Double = 65.0,
     val maxHeartRate: Double = 190.0,
     val primaryGoal: String = "Hypertrophy & Biomechanics",
-    val experienceLevel: String = "Intermediate"
+    val experienceLevel: String = "Intermediate",
+    val hasAcceptedSensingConsent: Boolean = false,
+    val smartSpectraTelemetryEnabled: Boolean = true,
+    val preferLocalEdgeAi: Boolean = false
 ) {
     /**
      * Calculates personalized heart rate zones using the Karvonen Heart Rate Reserve (HRR) formula:
@@ -34,6 +38,28 @@ data class UserProfile(
             else -> HeartRateZone.MAX
         }
     }
+
+    /**
+     * Computes personalized BPM ranges for each Karvonen HRR zone for UI display.
+     */
+    fun getKarvonenZoneThresholds(): List<Pair<HeartRateZone, IntRange>> {
+        val hrr = maxOf(1.0, maxHeartRate - restingHeartRate)
+        fun bpmAt(pct: Double): Int = (restingHeartRate + hrr * pct).roundToInt()
+
+        val z1Start = bpmAt(0.50)
+        val z2Start = bpmAt(0.65)
+        val z3Start = bpmAt(0.80)
+        val z4Start = bpmAt(0.90)
+        val maxInt = maxHeartRate.roundToInt()
+
+        return listOf(
+            HeartRateZone.RESTING to (restingHeartRate.roundToInt() until z1Start),
+            HeartRateZone.WARMUP to (z1Start until z2Start),
+            HeartRateZone.AEROBIC to (z2Start until z3Start),
+            HeartRateZone.ANAEROBIC to (z3Start until z4Start),
+            HeartRateZone.MAX to (z4Start..maxOf(z4Start, maxInt))
+        )
+    }
 }
 
 class UserPreferencesRepository(private val context: Context) {
@@ -45,6 +71,9 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_MAX_HR = doublePreferencesKey("max_hr")
         val KEY_GOAL = stringPreferencesKey("primary_goal")
         val KEY_EXPERIENCE = stringPreferencesKey("experience_level")
+        val KEY_SENSING_CONSENT = booleanPreferencesKey("has_accepted_sensing_consent")
+        val KEY_SMARTSPECTRA_TELEMETRY = booleanPreferencesKey("smartspectra_telemetry_enabled")
+        val KEY_PREFER_LOCAL_EDGE_AI = booleanPreferencesKey("prefer_local_edge_ai")
     }
 
     val userProfileFlow: Flow<UserProfile> = context.dataStore.data.map { prefs ->
@@ -58,7 +87,10 @@ class UserPreferencesRepository(private val context: Context) {
             restingHeartRate = prefs[KEY_RESTING_HR] ?: 65.0,
             maxHeartRate = prefs[KEY_MAX_HR] ?: defaultMaxHr,
             primaryGoal = prefs[KEY_GOAL] ?: "Hypertrophy & Biomechanics",
-            experienceLevel = prefs[KEY_EXPERIENCE] ?: "Intermediate"
+            experienceLevel = prefs[KEY_EXPERIENCE] ?: "Intermediate",
+            hasAcceptedSensingConsent = prefs[KEY_SENSING_CONSENT] ?: false,
+            smartSpectraTelemetryEnabled = prefs[KEY_SMARTSPECTRA_TELEMETRY] ?: true,
+            preferLocalEdgeAi = prefs[KEY_PREFER_LOCAL_EDGE_AI] ?: false
         )
     }
 
@@ -70,6 +102,15 @@ class UserPreferencesRepository(private val context: Context) {
             prefs[KEY_MAX_HR] = profile.maxHeartRate
             prefs[KEY_GOAL] = profile.primaryGoal
             prefs[KEY_EXPERIENCE] = profile.experienceLevel
+            prefs[KEY_SENSING_CONSENT] = profile.hasAcceptedSensingConsent
+            prefs[KEY_SMARTSPECTRA_TELEMETRY] = profile.smartSpectraTelemetryEnabled
+            prefs[KEY_PREFER_LOCAL_EDGE_AI] = profile.preferLocalEdgeAi
+        }
+    }
+
+    suspend fun setSensingConsent(accepted: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SENSING_CONSENT] = accepted
         }
     }
 }

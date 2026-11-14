@@ -14,8 +14,8 @@ enum class AdkAuthMode {
     FIREBASE_AI_LOGIC,
 
     /**
-     * On-device sub-agent using Gemini Nano / LiteRT-LM (ML Kit).
-     * Offline, zero network latency, privacy-sensitive local reasoning.
+     * On-device deterministic @Tool routing engine.
+     * Offline, zero network latency, 100% local execution.
      */
     ON_DEVICE_EDGE
 }
@@ -41,13 +41,8 @@ data class FirebaseGeminiAdapter(
         FirebaseAiService(modelName).generateText(prompt)
 }
 
-
 /**
  * On-device local inference adapter backed by [LocalEdgeEngine].
- *
- * Deterministic, network-free tool routing: discovers the agent's @Tool
- * functions and dispatches matching intents to FitnessTools locally.
- * No model download, no API key, sub-10ms latency for safety checks.
  */
 data class EdgeGeminiNanoAdapter(
     override val modelName: String = "gemini-nano-v2"
@@ -56,9 +51,6 @@ data class EdgeGeminiNanoAdapter(
 
     private val engine = LocalEdgeEngine()
 
-    /**
-     * Runs local edge inference over the agent's registered tools.
-     */
     suspend fun generate(prompt: String, tools: List<Any> = emptyList()): String =
         engine.generate(tools, prompt)
 }
@@ -78,10 +70,11 @@ data class AdkLlmAgent(
 
 /**
  * In-memory execution runner for ADK agents.
- * Handles coroutine dispatching, session state, and tool routing without persistent overhead.
+ * Handles coroutine dispatching, session state, and automatic offline fallback to
+ * [EdgeGeminiNanoAdapter] if Firebase AI Logic is unavailable or offline.
  */
 class AdkInMemoryRunner(
-    val agent: AdkLlmAgent,
+    var agent: AdkLlmAgent,
     val appName: String = "FitLens"
 ) {
     companion object {
@@ -89,6 +82,7 @@ class AdkInMemoryRunner(
     }
 
     private val sessionHistory = mutableListOf<String>()
+    private val edgeFallback = EdgeGeminiNanoAdapter()
 
     init {
         Log.i(
@@ -98,24 +92,34 @@ class AdkInMemoryRunner(
     }
 
     /**
-     * Executes prompt or event stream on the active agent.
+     * Executes prompt on the active agent. If the cloud backend is offline or
+     * unconfigured in a local/demo build, falls back seamlessly to on-device edge routing.
      */
     suspend fun execute(prompt: String): String {
-        sessionHistory.add("User: $prompt")
+        synchronized(sessionHistory) {
+            sessionHistory.add("User: $prompt")
+        }
         Log.d(TAG, "Executing agent prompt via ${agent.model.authMode}: $prompt")
 
-        val response = when (agent.model.authMode) {
-            AdkAuthMode.FIREBASE_AI_LOGIC -> {
-                (agent.model as FirebaseGeminiAdapter).generate(prompt)
+        val response = when (val currentModel = agent.model) {
+            is FirebaseGeminiAdapter -> {
+                runCatching {
+                    currentModel.generate(prompt)
+                }.getOrElse { e ->
+                    Log.w(TAG, "Firebase AI Logic unavailable (${e.message}); falling back to On-Device Edge.")
+                    edgeFallback.generate(prompt, agent.tools)
+                }
             }
-            AdkAuthMode.ON_DEVICE_EDGE -> {
-                (agent.model as EdgeGeminiNanoAdapter).generate(prompt, agent.tools)
+            is EdgeGeminiNanoAdapter -> {
+                currentModel.generate(prompt, agent.tools)
             }
         }
 
-        sessionHistory.add("Agent: $response")
+        synchronized(sessionHistory) {
+            sessionHistory.add("Agent: $response")
+        }
         return response
     }
 
-    fun getHistory(): List<String> = sessionHistory.toList()
+    fun getHistory(): List<String> = synchronized(sessionHistory) { sessionHistory.toList() }
 }

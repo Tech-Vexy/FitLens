@@ -14,7 +14,6 @@ if (file("google-services.json").exists()) {
 android {
     namespace = "com.fitlens.app"
     compileSdk = 36
-    buildToolsVersion = "34.0.0"
 
     signingConfigs {
         create("release") {
@@ -61,7 +60,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

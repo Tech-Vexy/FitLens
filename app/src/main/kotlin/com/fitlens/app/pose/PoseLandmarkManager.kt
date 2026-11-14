@@ -3,6 +3,7 @@ package com.fitlens.app.pose
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
+import android.os.SystemClock
 import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.google.mediapipe.framework.image.BitmapImageBuilder
@@ -10,6 +11,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
+import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.atan2
 
@@ -59,19 +61,23 @@ data class PoseAnalysisFrame(
     val currentAngle: Double,
     val repPhase: RepPhase,
     val activeDeviations: List<FormDeviation>,
-    val formScore: Float
+    val formScore: Float,
+    val frameWidth: Int = 0,
+    val frameHeight: Int = 0
 )
 
 /**
  * PoseLandmarkManager processes skeletal landmarks from MediaPipe PoseLandmarker
- * and computes joint angles, rep counts, and biomechanical form checks.
+ * in RunningMode.VIDEO with upright rotation/mirror normalization, EMA landmark
+ * smoothing, joint angle calculation, rep counting, and biomechanical form checks.
  */
 class PoseLandmarkManager(
     private val context: Context? = null
 ) {
     companion object {
         private const val TAG = "PoseLandmarkManager"
-        private const val MAX_ANALYSIS_DIM = 640
+        private const val MAX_ANALYSIS_DIM = 480
+        private const val DEFAULT_SMOOTHING_ALPHA = 0.65f
 
         // MediaPipe Pose landmark indices
         const val NOSE = 0
@@ -87,33 +93,74 @@ class PoseLandmarkManager(
         const val RIGHT_KNEE = 26
         const val LEFT_ANKLE = 27
         const val RIGHT_ANKLE = 28
+
+        /**
+         * Maps an output bitmap coordinate (ox, oy) in the upright (and optionally
+         * horizontally mirrored) output space back to raw camera sensor coordinates (sx, sy).
+         *
+         * @param rotationDegrees Clockwise sensor-to-display rotation (0, 90, 180, or 270).
+         * @param mirrorHorizontally True for front-facing camera previews so skeletal landmarks
+         *                           align with the mirrored PreviewView.
+         */
+        fun mapOutputToSensorCoords(
+            ox: Int,
+            oy: Int,
+            outW: Int,
+            outH: Int,
+            stride: Int,
+            srcW: Int,
+            srcH: Int,
+            rotationDegrees: Int,
+            mirrorHorizontally: Boolean
+        ): Pair<Int, Int> {
+            val normalizedRot = ((rotationDegrees % 360) + 360) % 360
+            val rotatedW = if (normalizedRot == 90 || normalizedRot == 270) srcH else srcW
+            val rotatedH = if (normalizedRot == 90 || normalizedRot == 270) srcW else srcH
+
+            val unmirroredOx = if (mirrorHorizontally) (outW - 1 - ox) else ox
+            val rx = (unmirroredOx * stride).coerceIn(0, rotatedW - 1)
+            val ry = (oy * stride).coerceIn(0, rotatedH - 1)
+
+            return when (normalizedRot) {
+                90 -> Pair(ry.coerceIn(0, srcW - 1), (srcH - 1 - rx).coerceIn(0, srcH - 1))
+                180 -> Pair((srcW - 1 - rx).coerceIn(0, srcW - 1), (srcH - 1 - ry).coerceIn(0, srcH - 1))
+                270 -> Pair((srcW - 1 - ry).coerceIn(0, srcW - 1), rx.coerceIn(0, srcH - 1))
+                else -> Pair(rx.coerceIn(0, srcW - 1), ry.coerceIn(0, srcH - 1))
+            }
+        }
+
+        /**
+         * Returns true when [exercise] is an isometric timed hold (e.g. Plank) rather than
+         * a dynamic concentric/eccentric repetition movement.
+         */
+        fun isIsometricExercise(exercise: String): Boolean {
+            return exercise.trim().equals("plank", ignoreCase = true)
+        }
     }
 
     private var activeExercise: String = "Squat"
     private var repCount: Int = 0
     private var currentPhase: RepPhase = RepPhase.START
     private var minAngleObserved: Double = 180.0
-    // Counts distinct critical-fault episodes (per joint), not per-frame occurrences,
-    // so form accuracy doesn't decay to zero during sustained bad form.
     private var totalDeviationsCount: Int = 0
     private var previousCriticalJoints: Set<String> = emptySet()
+
+    // Temporal EMA state for camera video landmark smoothing
+    private val smoothedLandmarkState = mutableMapOf<Int, LandmarkPoint>()
+    private var lastVideoTimestampMs: Long = 0L
 
     // MediaPipe PoseLandmarker instance (lazy-initialized on first frame)
     @Volatile private var mpLandmarker: PoseLandmarker? = null
 
-    // Scratch buffers reused across frames. A full-res YUV_420_888 frame would
-    // otherwise allocate a multi-MB IntArray + Bitmap on every camera frame.
-    // analyzeFrame only runs on the single-threaded CameraX executor.
-    private var scratchRow: ByteArray? = null
+    // Reused scratch buffers across frames to avoid GC churn on the camera thread
+    private var scratchY: ByteArray? = null
+    private var scratchU: ByteArray? = null
+    private var scratchV: ByteArray? = null
     private var scratchPixels: IntArray? = null
     private var scratchBitmap: Bitmap? = null
     private var scratchBitmapW = 0
     private var scratchBitmapH = 0
 
-    /**
-     * Initializes the MediaPipe PoseLandmarker on the first call to [analyzeFrame].
-     * Uses the bundled pose landmarker task binary resource.
-     */
     private fun ensureLandmarker(): PoseLandmarker? {
         return mpLandmarker ?: runCatching {
             context?.let { ctx ->
@@ -123,48 +170,61 @@ class PoseLandmarkManager(
                             .setModelAssetPath("pose_landmarker.task")
                             .build()
                     )
-                    .setRunningMode(RunningMode.IMAGE)
+                    .setRunningMode(RunningMode.VIDEO)
                     .setMinPoseDetectionConfidence(0.5f)
                     .setMinPosePresenceConfidence(0.5f)
+                    .setMinTrackingConfidence(0.5f)
                     .setOutputSegmentationMasks(false)
                     .build()
                 PoseLandmarker.createFromOptions(ctx, options).also {
                     mpLandmarker = it
-                    Log.d(TAG, "MediaPipe PoseLandmarker initialized successfully")
+                    Log.d(TAG, "MediaPipe PoseLandmarker initialized in VIDEO mode")
                 }
             }
         }.getOrNull()
     }
 
     /**
-     * Analyzes a CameraX ImageProxy frame via MediaPipe PoseLandmarker.
-     * Converts the YUV_420_888 ImageProxy to a Bitmap, runs pose detection,
-     * and returns a [PoseAnalysisFrame] with the detected landmarks.
+     * Analyzes a CameraX ImageProxy frame via MediaPipe PoseLandmarker in VIDEO mode.
+     * Normalizes sensor rotation and front-camera mirroring into an upright color Bitmap,
+     * runs temporal pose tracking, smooths landmarks, and computes biomechanical metrics.
      *
-     * The caller (DualStreamAnalyzer) is responsible for closing the ImageProxy
-     * after this method returns.
+     * The caller (DualStreamAnalyzer) remains responsible for closing [imageProxy]
+     * after SmartSpectra consumes it.
      */
     @Synchronized
-    fun analyzeFrame(imageProxy: ImageProxy): PoseAnalysisFrame {
+    fun analyzeFrame(
+        imageProxy: ImageProxy,
+        isFrontCamera: Boolean = true
+    ): PoseAnalysisFrame {
         val landmarker = ensureLandmarker()
             ?: return analyzeLandmarks(emptyMap())
 
-        // MediaPipe pose requires YUV_420_888; bail out cleanly for other formats.
         if (imageProxy.format != ImageFormat.YUV_420_888) {
             Log.w(TAG, "Unsupported image format: ${imageProxy.format}")
             return analyzeLandmarks(emptyMap())
         }
 
         return runCatching {
-            // Convert ImageProxy to Bitmap, then to MediaPipe MPImage
-            val bitmap = imageProxy.toBitmap()
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            val bitmap = imageProxy.toUprightColorBitmap(
+                rotationDegrees = rotationDegrees,
+                mirrorHorizontally = isFrontCamera
+            )
             val mpImage = BitmapImageBuilder(bitmap).build()
-            val mpResult = landmarker.detect(mpImage)
-            mpImage.close()
-            // bitmap is a reused scratch buffer — do NOT recycle it here.
+            val timestampMs = maxOf(lastVideoTimestampMs + 1L, SystemClock.uptimeMillis())
+            lastVideoTimestampMs = timestampMs
 
-            val landmarks = landmarksFromMediaPipe(mpResult)
-            analyzeLandmarks(landmarks)
+            val mpResult = landmarker.detectForVideo(mpImage, timestampMs)
+            mpImage.close()
+
+            val rawLandmarks = landmarksFromMediaPipe(mpResult)
+            val smoothed = smoothLandmarks(rawLandmarks, DEFAULT_SMOOTHING_ALPHA)
+            analyzeLandmarks(
+                landmarks = smoothed,
+                frameWidth = bitmap.width,
+                frameHeight = bitmap.height
+            )
         }.getOrElse { e ->
             Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
             analyzeLandmarks(emptyMap())
@@ -172,57 +232,139 @@ class PoseLandmarkManager(
     }
 
     /**
-     * Converts a CameraX ImageProxy (YUV_420_888) to a downscaled ARGB_8888 Bitmap
-     * for MediaPipe, reading only the Y (luminance) plane as a grayscale approximation.
-     *
-     * The frame is downscaled to at most [MAX_ANALYSIS_DIM] pixels on the long edge:
-     * MediaPipe internally resizes to its model input anyway, and pose landmarks are
-     * normalized coordinates, so detection accuracy is unaffected while per-frame
-     * conversion + inference cost drops substantially.
-     *
-     * The plane buffer is duplicated before reading so the original buffer position is
-     * preserved for downstream consumers of the same ImageProxy (e.g. SmartSpectra rPPG),
-     * and rowStride/pixelStride are honored so padded or subsampled planes decode correctly.
-     *
-     * Row/pixel/bitmap scratch buffers are reused across frames; the returned Bitmap
-     * is overwritten on the next call and must not be retained or recycled by callers.
+     * Applies Exponential Moving Average (EMA) temporal smoothing to 3D landmarks
+     * to eliminate single-frame jitter while maintaining crisp responsiveness.
      */
-    private fun ImageProxy.toBitmap(): Bitmap {
-        val yPlane = planes[0]
-        val rowStride = yPlane.rowStride
-        val pixelStride = yPlane.pixelStride
-        val w = width
-        val h = height
-
-        val stride = maxOf(1, maxOf(w, h) / MAX_ANALYSIS_DIM)
-        val outW = (w + stride - 1) / stride
-        val outH = (h + stride - 1) / stride
-
-        val buffer = yPlane.buffer.duplicate()
-        val rowBytes = w * pixelStride
-        var row = scratchRow
-        if (row == null || row.size < rowBytes) {
-            row = ByteArray(rowBytes)
-            scratchRow = row
+    @Synchronized
+    fun smoothLandmarks(
+        raw: Map<Int, LandmarkPoint>,
+        alpha: Float = DEFAULT_SMOOTHING_ALPHA
+    ): Map<Int, LandmarkPoint> {
+        if (raw.isEmpty()) {
+            smoothedLandmarkState.clear()
+            return emptyMap()
         }
+        val clampedAlpha = alpha.coerceIn(0.05f, 1.0f)
+        val invAlpha = 1.0f - clampedAlpha
+        val result = HashMap<Int, LandmarkPoint>(raw.size)
+
+        for ((idx, current) in raw) {
+            val prev = smoothedLandmarkState[idx]
+            val blended = if (prev != null && current.visibility >= 0.35f) {
+                LandmarkPoint(
+                    x = (clampedAlpha * current.x + invAlpha * prev.x).coerceIn(0f, 1f),
+                    y = (clampedAlpha * current.y + invAlpha * prev.y).coerceIn(0f, 1f),
+                    z = clampedAlpha * current.z + invAlpha * prev.z,
+                    visibility = current.visibility
+                )
+            } else {
+                current
+            }
+            smoothedLandmarkState[idx] = blended
+            result[idx] = blended
+        }
+        return result
+    }
+
+    private fun copyPlaneBuffer(buffer: ByteBuffer, targetHolder: ByteArray?): Pair<ByteArray, Int> {
+        val dup = buffer.duplicate()
+        dup.rewind()
+        val length = dup.remaining()
+        val array = if (targetHolder == null || targetHolder.size < length) {
+            ByteArray(length)
+        } else {
+            targetHolder
+        }
+        dup.get(array, 0, length)
+        return Pair(array, length)
+    }
+
+    /**
+     * Converts a YUV_420_888 ImageProxy to a downscaled, upright, optionally mirrored
+     * ARGB_8888 color Bitmap without altering the underlying ImageProxy ByteBuffers.
+     */
+    private fun ImageProxy.toUprightColorBitmap(
+        rotationDegrees: Int,
+        mirrorHorizontally: Boolean
+    ): Bitmap {
+        val srcW = width
+        val srcH = height
+        val normalizedRot = ((rotationDegrees % 360) + 360) % 360
+        val rotatedW = if (normalizedRot == 90 || normalizedRot == 270) srcH else srcW
+        val rotatedH = if (normalizedRot == 90 || normalizedRot == 270) srcW else srcH
+
+        val stride = maxOf(1, maxOf(rotatedW, rotatedH) / MAX_ANALYSIS_DIM)
+        val outW = maxOf(1, rotatedW / stride)
+        val outH = maxOf(1, rotatedH / stride)
+
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+
+        val (yBytes, yLen) = copyPlaneBuffer(yPlane.buffer, scratchY)
+        val (uBytes, uLen) = copyPlaneBuffer(uPlane.buffer, scratchU)
+        val (vBytes, vLen) = copyPlaneBuffer(vPlane.buffer, scratchV)
+        scratchY = yBytes
+        scratchU = uBytes
+        scratchV = vBytes
+
+        val yRowStride = yPlane.rowStride
+        val yPixelStride = yPlane.pixelStride
+        val uRowStride = uPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vRowStride = vPlane.rowStride
+        val vPixelStride = vPlane.pixelStride
+
         var pixels = scratchPixels
         if (pixels == null || pixels.size < outW * outH) {
             pixels = IntArray(outW * outH)
             scratchPixels = pixels
         }
         val px = pixels
-        val rw = row
 
         for (oy in 0 until outH) {
-            val sy = oy * stride
-            buffer.position(sy * rowStride)
-            // Read exactly rowBytes — the scratch row may be larger than this
-            // frame's row when reused across resolution changes.
-            buffer.get(rw, 0, rowBytes)
             val rowOffset = oy * outW
             for (ox in 0 until outW) {
-                val v = rw[ox * stride * pixelStride].toInt() and 0xFF
-                px[rowOffset + ox] = -0x1000000 or (v shl 16) or (v shl 8) or v
+                val unmirroredOx = if (mirrorHorizontally) (outW - 1 - ox) else ox
+                val rx = (unmirroredOx * stride).coerceIn(0, rotatedW - 1)
+                val ry = (oy * stride).coerceIn(0, rotatedH - 1)
+
+                val sx: Int
+                val sy: Int
+                when (normalizedRot) {
+                    90 -> {
+                        sx = ry
+                        sy = srcH - 1 - rx
+                    }
+                    180 -> {
+                        sx = srcW - 1 - rx
+                        sy = srcH - 1 - ry
+                    }
+                    270 -> {
+                        sx = srcW - 1 - ry
+                        sy = rx
+                    }
+                    else -> {
+                        sx = rx
+                        sy = ry
+                    }
+                }
+
+                val yIdx = (sy * yRowStride + sx * yPixelStride).coerceIn(0, maxOf(0, yLen - 1))
+                val uvX = sx shr 1
+                val uvY = sy shr 1
+                val uIdx = (uvY * uRowStride + uvX * uPixelStride).coerceIn(0, maxOf(0, uLen - 1))
+                val vIdx = (uvY * vRowStride + uvX * vPixelStride).coerceIn(0, maxOf(0, vLen - 1))
+
+                val yVal = yBytes[yIdx].toInt() and 0xFF
+                val uVal = (uBytes[uIdx].toInt() and 0xFF) - 128
+                val vVal = (vBytes[vIdx].toInt() and 0xFF) - 128
+
+                val r = (yVal + ((1436 * vVal) shr 10)).coerceIn(0, 255)
+                val g = (yVal - ((352 * uVal + 731 * vVal) shr 10)).coerceIn(0, 255)
+                val b = (yVal + ((1814 * uVal) shr 10)).coerceIn(0, 255)
+
+                px[rowOffset + ox] = -0x1000000 or (r shl 16) or (g shl 8) or b
             }
         }
 
@@ -237,11 +379,6 @@ class PoseLandmarkManager(
         return bitmap
     }
 
-    /**
-     * Converts MediaPipe PoseLandmarkerResult to our LandmarkPoint map.
-     * Only the highest-confidence (first) detected pose is used; merging multiple
-     * detected poses would corrupt joint-angle calculations.
-     */
     private fun landmarksFromMediaPipe(result: PoseLandmarkerResult): Map<Int, LandmarkPoint> {
         val map = mutableMapOf<Int, LandmarkPoint>()
         val pose = result.landmarks().firstOrNull() ?: return emptyMap()
@@ -259,6 +396,7 @@ class PoseLandmarkManager(
     fun setExercise(exercise: String) {
         activeExercise = exercise
         totalDeviationsCount = 0
+        smoothedLandmarkState.clear()
         resetRepCounter()
     }
 
@@ -276,6 +414,13 @@ class PoseLandmarkManager(
     @Synchronized
     fun getRepCount(): Int = repCount
 
+    @Synchronized
+    fun close() {
+        runCatching { mpLandmarker?.close() }
+        mpLandmarker = null
+        smoothedLandmarkState.clear()
+    }
+
     /**
      * Calculates the angle in degrees formed by three points (A -> B -> C) at vertex B.
      */
@@ -290,40 +435,45 @@ class PoseLandmarkManager(
 
     /**
      * Analyzes landmark map, detects reps, and checks exercise form.
-     * Synchronized because it is invoked from the CameraX analyzer thread and
-     * (for simulation/testing) potentially the main thread.
      */
     @Synchronized
-    fun analyzeLandmarks(landmarks: Map<Int, LandmarkPoint>): PoseAnalysisFrame {
+    fun analyzeLandmarks(
+        landmarks: Map<Int, LandmarkPoint>,
+        frameWidth: Int = 0,
+        frameHeight: Int = 0
+    ): PoseAnalysisFrame {
         val deviations = mutableListOf<FormDeviation>()
         var primaryAngle = 180.0
 
-        when (activeExercise.lowercase()) {
-            "squat", "squats", "bodyweight squats", "barbell squat" -> {
+        val normalizedExercise = activeExercise.lowercase()
+        when {
+            normalizedExercise.contains("squat") -> {
                 primaryAngle = analyzeSquat(landmarks, deviations)
             }
-            "push-up", "push-ups" -> {
+            normalizedExercise.contains("push-up") || normalizedExercise.contains("pushup") || normalizedExercise.contains("press") -> {
                 primaryAngle = analyzePushUp(landmarks, deviations)
             }
-            "lunge", "lunges" -> {
+            normalizedExercise.contains("lunge") || normalizedExercise.contains("deadlift") -> {
                 primaryAngle = analyzeLunge(landmarks, deviations)
             }
-            "plank" -> {
+            normalizedExercise.contains("plank") || normalizedExercise.contains("climber") -> {
                 primaryAngle = analyzePlank(landmarks, deviations)
             }
             else -> {
-                // Default joint angle tracking (knee angle)
                 val hip = landmarks[LEFT_HIP] ?: landmarks[RIGHT_HIP]
                 val knee = landmarks[LEFT_KNEE] ?: landmarks[RIGHT_KNEE]
                 val ankle = landmarks[LEFT_ANKLE] ?: landmarks[RIGHT_ANKLE]
                 if (hip != null && knee != null && ankle != null) {
                     primaryAngle = calculateAngle(hip, knee, ankle)
+                    updateRepStateMachine(
+                        angle = primaryAngle,
+                        inflectionThreshold = 105.0,
+                        completionThreshold = 160.0
+                    )
                 }
             }
         }
 
-        // Count each critical joint fault once per episode (when it first appears),
-        // not once per frame — otherwise sustained bad form inflates the count.
         val criticalJoints = deviations
             .filter { it.severity == DeviationSeverity.CRITICAL }
             .map { it.jointName }
@@ -331,7 +481,6 @@ class PoseLandmarkManager(
         totalDeviationsCount += criticalJoints.count { it !in previousCriticalJoints }
         previousCriticalJoints = criticalJoints
 
-        // Form score reflects the current frame's deviations, not the cumulative total.
         val framePenalty = deviations.map {
             when (it.severity) {
                 DeviationSeverity.CRITICAL -> 30f
@@ -348,7 +497,9 @@ class PoseLandmarkManager(
             currentAngle = primaryAngle,
             repPhase = currentPhase,
             activeDeviations = deviations,
-            formScore = formScore
+            formScore = formScore,
+            frameWidth = frameWidth,
+            frameHeight = frameHeight
         )
     }
 
@@ -365,10 +516,8 @@ class PoseLandmarkManager(
             return 180.0
         }
 
-        // Knee flexion angle: ~170-180 standing, ~80-90 at full squat depth
         val kneeAngle = calculateAngle(hip, knee, ankle)
 
-        // Torso inclination angle
         if (shoulder != null) {
             val backAngle = calculateAngle(shoulder, hip, knee)
             if (backAngle < 60.0 && kneeAngle < 120.0) {
@@ -382,7 +531,6 @@ class PoseLandmarkManager(
             }
         }
 
-        // Knee valgus check (distance between knees vs distance between ankles)
         val lKnee = landmarks[LEFT_KNEE]
         val rKnee = landmarks[RIGHT_KNEE]
         val lAnkle = landmarks[LEFT_ANKLE]
@@ -401,7 +549,6 @@ class PoseLandmarkManager(
             }
         }
 
-        // Rep detection state machine
         updateRepStateMachine(
             angle = kneeAngle,
             inflectionThreshold = 95.0,
@@ -427,7 +574,6 @@ class PoseLandmarkManager(
 
         val elbowAngle = calculateAngle(shoulder, elbow, wrist)
 
-        // Body straightness check
         if (hip != null && ankle != null) {
             val bodyLineAngle = calculateAngle(shoulder, hip, ankle)
             if (bodyLineAngle < 155.0) {
@@ -441,7 +587,6 @@ class PoseLandmarkManager(
             }
         }
 
-        // Rep detection: elbow < 90 is inflection, > 155 is extension
         updateRepStateMachine(
             angle = elbowAngle,
             inflectionThreshold = 90.0,
@@ -465,10 +610,8 @@ class PoseLandmarkManager(
         val leftKneeAngle = if (lHip != null && lKnee != null && lAnkle != null) calculateAngle(lHip, lKnee, lAnkle) else 180.0
         val rightKneeAngle = if (rHip != null && rKnee != null && rAnkle != null) calculateAngle(rHip, rKnee, rAnkle) else 180.0
 
-        // The working/leading leg has the sharper flexion (< 120)
         val workingKneeAngle = minOf(leftKneeAngle, rightKneeAngle)
 
-        // Check if front knee goes past excessive flexion (< 75 deg, excessive forward drive)
         if (workingKneeAngle < 75.0) {
             deviations.add(
                 FormDeviation(
@@ -500,24 +643,28 @@ class PoseLandmarkManager(
             return 180.0
         }
 
+        // Signed bend check alongside interior angle so both sagging and piking are caught
         val bodyAngle = calculateAngle(shoulder, hip, ankle)
+        val midY = (shoulder.y + ankle.y) / 2f
 
         if (bodyAngle < 155.0) {
-            deviations.add(
-                FormDeviation(
-                    jointName = "Hips",
-                    message = "Hips sagging. Squeeze glutes and brace abdominals.",
-                    severity = DeviationSeverity.CRITICAL
+            if (hip.y >= midY) {
+                deviations.add(
+                    FormDeviation(
+                        jointName = "Hips",
+                        message = "Hips sagging. Squeeze glutes and brace abdominals.",
+                        severity = DeviationSeverity.CRITICAL
+                    )
                 )
-            )
-        } else if (bodyAngle > 205.0) {
-            deviations.add(
-                FormDeviation(
-                    jointName = "Hips",
-                    message = "Hips piked too high. Lower hips into a straight plank line.",
-                    severity = DeviationSeverity.WARNING
+            } else {
+                deviations.add(
+                    FormDeviation(
+                        jointName = "Hips",
+                        message = "Hips piked too high. Lower hips into a straight plank line.",
+                        severity = DeviationSeverity.WARNING
+                    )
                 )
-            )
+            }
         }
 
         return bodyAngle
@@ -542,7 +689,6 @@ class PoseLandmarkManager(
                 if (angle <= inflectionThreshold) {
                     currentPhase = RepPhase.INFLECTION
                 } else if (angle > completionThreshold) {
-                    // Aborted rep
                     currentPhase = RepPhase.START
                 }
             }

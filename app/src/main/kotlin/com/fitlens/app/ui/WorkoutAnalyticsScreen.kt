@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fitlens.app.data.LocalDataExportManager
 import com.fitlens.app.data.WorkoutDatabase
+import com.fitlens.app.data.model.BiomechanicalFaultEntity
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.workout.ProgressionInsight
 import kotlinx.coroutines.launch
@@ -25,27 +26,72 @@ import kotlinx.coroutines.launch
 @Composable
 fun WorkoutAnalyticsScreen(
     sessions: List<WorkoutSessionEntity>,
+    faults: List<BiomechanicalFaultEntity> = emptyList(),
     insight: ProgressionInsight?,
+    onDeleteAllData: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var exportStatusText by remember { mutableStateOf<String?>(null) }
+    var statusBannerText by remember { mutableStateOf<String?>(null) }
     var isExporting by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     val totalWorkouts = sessions.size
     val totalReps = sessions.sumOf { it.completedReps }
     val avgAccuracy = if (sessions.isNotEmpty()) sessions.map { it.formAccuracyPercentage }.average() else 100.0
-    val avgHeartRate = if (sessions.isNotEmpty()) sessions.map { it.averageHeartRate }.average() else 135.0
+    val avgExtendedRest = if (sessions.isNotEmpty()) sessions.map { it.extendedRestSeconds }.average().toInt() else 0
+
+    // Real SQLite biomechanical fault counts per joint group
+    val kneeFaultCount = faults.count { it.jointName.contains("knee", ignoreCase = true) }
+    val torsoFaultCount = faults.count {
+        it.jointName.contains("back", ignoreCase = true) || it.jointName.contains("torso", ignoreCase = true)
+    }
+    val hipCoreFaultCount = faults.count {
+        it.jointName.contains("hip", ignoreCase = true) || it.jointName.contains("core", ignoreCase = true)
+    }
+
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            containerColor = Color(0xFF192131),
+            title = { Text("Delete All Local Vault Data?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This permanently erases all ${sessions.size} workout sessions, local rPPG vitals logs, and ${faults.size} biomechanical fault events from fitlens_health_sqlite.db.",
+                    color = Color.LightGray,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteAllData()
+                        showDeleteConfirmDialog = false
+                        statusBannerText = "All local SQLite workout, vitals, and fault records were permanently erased."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
+                ) {
+                    Text("Erase Everything", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancel", color = Color.LightGray)
+                }
+            }
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF101010))
+            .background(Color(0xFF0E121B))
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Top Bar
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -56,55 +102,65 @@ fun WorkoutAnalyticsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Column {
                         Text(
-                            text = "Analytics & Progression",
+                            text = "Local Health Vault",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "100% Local SQLite Health Vault",
+                            text = "100% On-Device SQLite • Export or Erase Anytime",
                             fontSize = 11.sp,
-                            color = Color(0xFF00E676)
+                            color = Color(0xFF6EE7B7)
                         )
                     }
                 }
 
-                // Export Local Data Button
-                IconButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isExporting = true
-                            val db = WorkoutDatabase.getDatabase(context)
-                            val exporter = LocalDataExportManager(context, db.workoutDao())
-                            val exportPath = exporter.exportHealthDataToJson()
-                            exportStatusText = "Exported strictly to local device storage:\n${exportPath.takeLast(40)}"
-                            isExporting = false
-                        }
-                    },
-                    enabled = !isExporting
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FileDownload,
-                        contentDescription = "Export Local Health Data",
-                        tint = Color(0xFF00B0FF)
-                    )
+                Row {
+                    IconButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                isExporting = true
+                                val db = WorkoutDatabase.getDatabase(context)
+                                val exporter = LocalDataExportManager(context, db.workoutDao())
+                                val exportPath = exporter.exportHealthDataToJson()
+                                statusBannerText = "Exported locally to device storage:\n${exportPath.takeLast(48)}"
+                                isExporting = false
+                            }
+                        },
+                        enabled = !isExporting
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileDownload,
+                            contentDescription = "Export Local Health Data JSON",
+                            tint = Color(0xFF4FCCC4)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showDeleteConfirmDialog = true },
+                        enabled = sessions.isNotEmpty() || faults.isNotEmpty()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteForever,
+                            contentDescription = "Delete All Local Data",
+                            tint = if (sessions.isNotEmpty() || faults.isNotEmpty()) Color(0xFFFF6B6B) else Color.Gray
+                        )
+                    }
                 }
             }
         }
 
-        // Export Confirmation Banner
-        exportStatusText?.let { path ->
+        statusBannerText?.let { msg ->
             item {
                 Surface(
                     color = Color(0xFF00E676).copy(alpha = 0.15f),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = "🔒 $path",
-                        color = Color(0xFF00E676),
+                        text = "🔒 $msg",
+                        color = Color(0xFF6EE7B7),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(10.dp)
                     )
@@ -112,7 +168,6 @@ fun WorkoutAnalyticsScreen(
             }
         }
 
-        // Metrics Overview Cards
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -125,11 +180,11 @@ fun WorkoutAnalyticsScreen(
                 )
                 SummaryMetricCard(
                     title = "Total Volume",
-                    value = "$totalReps reps",
+                    value = "$totalReps",
                     modifier = Modifier.weight(1f)
                 )
                 SummaryMetricCard(
-                    title = "Form Accuracy",
+                    title = "Avg Form",
                     value = "${avgAccuracy.toInt()}%",
                     valueColor = Color(0xFF00E676),
                     modifier = Modifier.weight(1f)
@@ -137,11 +192,10 @@ fun WorkoutAnalyticsScreen(
             }
         }
 
-        // ADK Progression Assessment
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2838)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF192436)),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -154,7 +208,7 @@ fun WorkoutAnalyticsScreen(
                             text = insight?.title ?: "Readiness Baseline",
                             color = Color(0xFF80DEEA),
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                            fontSize = 15.sp
                         )
                         Surface(
                             color = Color(0xFF00E676).copy(alpha = 0.2f),
@@ -171,7 +225,7 @@ fun WorkoutAnalyticsScreen(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = insight?.description ?: "Consistent form tracking and vitals data will populate progression models.",
+                        text = insight?.description ?: "Complete workouts to populate longitudinal progression insights.",
                         color = Color.White,
                         fontSize = 13.sp
                     )
@@ -179,34 +233,49 @@ fun WorkoutAnalyticsScreen(
             }
         }
 
-        // Biomechanical Joint Health Breakdown
+        // Dynamic SQLite-Computed Biomechanical Joint Stability Breakdown
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF192131)),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Biomechanical Joint Stability",
+                        text = "Biomechanical Telemetry Breakdown",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
+                        fontSize = 15.sp
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    JointStabilityRow("Knee Valgus (Inward Cave)", "Optimal (Protected)", Color(0xFF00E676))
+                    JointStabilityRow(
+                        joint = "Knee Valgus Alignment",
+                        status = if (kneeFaultCount == 0) "Optimal (0 faults)" else "$kneeFaultCount fault episode(s)",
+                        statusColor = if (kneeFaultCount == 0) Color(0xFF00E676) else Color(0xFFFFB74D)
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    JointStabilityRow("Torso Lean (Spinal Neutrality)", "Stable (Chest Up)", Color(0xFF00E676))
+                    JointStabilityRow(
+                        joint = "Torso & Spinal Neutrality",
+                        status = if (torsoFaultCount == 0) "Stable (0 faults)" else "$torsoFaultCount lean warning(s)",
+                        statusColor = if (torsoFaultCount == 0) Color(0xFF00E676) else Color(0xFFFFB74D)
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    JointStabilityRow("Core Alignment in Plank", "Strong (No Sagging)", Color(0xFF00E676))
+                    JointStabilityRow(
+                        joint = "Core & Hip Line (Plank/Push-Up)",
+                        status = if (hipCoreFaultCount == 0) "Braced (0 faults)" else "$hipCoreFaultCount sag episode(s)",
+                        statusColor = if (hipCoreFaultCount == 0) Color(0xFF00E676) else Color(0xFFFFB74D)
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    JointStabilityRow("Cardiovascular Recovery", "Adaptive (+15s avg rest)", Color(0xFFFFB74D))
+                    JointStabilityRow(
+                        joint = "SmartSpectra Adaptive Rest",
+                        status = if (avgExtendedRest > 0) "+${avgExtendedRest}s avg HR recovery" else "On-schedule recovery",
+                        statusColor = if (avgExtendedRest > 0) Color(0xFF4FCCC4) else Color(0xFF00E676)
+                    )
                 }
             }
         }
 
-        // Session Logs
         item {
             Text(
                 text = "Session History (${sessions.size})",
@@ -219,7 +288,7 @@ fun WorkoutAnalyticsScreen(
         if (sessions.isEmpty()) {
             item {
                 Text(
-                    text = "No completed sessions yet. Start a workout to record telemetry.",
+                    text = "No stored sessions in fitlens_health_sqlite.db. Complete a workout to log local telemetry.",
                     color = Color.Gray,
                     fontSize = 13.sp
                 )
@@ -228,8 +297,8 @@ fun WorkoutAnalyticsScreen(
             items(sessions) { session ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-                    shape = RoundedCornerShape(8.dp)
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF192131)),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(
@@ -237,9 +306,15 @@ fun WorkoutAnalyticsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(session.exerciseName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             Text(
-                                "${session.formAccuracyPercentage.toInt()}% accuracy",
+                                session.exerciseName,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "${session.formAccuracyPercentage.toInt()}% form",
                                 color = if (session.formAccuracyPercentage >= 85) Color(0xFF00E676) else Color(0xFFFFB74D),
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 12.sp
@@ -247,14 +322,14 @@ fun WorkoutAnalyticsScreen(
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "${session.completedReps} reps • ${session.durationSeconds / 60}m ${session.durationSeconds % 60}s • Avg HR: ${session.averageHeartRate.toInt()} bpm",
+                            text = "Completed: ${session.completedReps} • ${session.durationSeconds / 60}m ${session.durationSeconds % 60}s • Avg HR: ${session.averageHeartRate.toInt()} bpm",
                             color = Color.LightGray,
                             fontSize = 12.sp
                         )
                         if (session.extendedRestSeconds > 0) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "⏱️ +${session.extendedRestSeconds}s adaptive recovery rest applied",
+                                text = "⏱️ +${session.extendedRestSeconds}s SmartSpectra adaptive recovery rest",
                                 color = Color(0xFFFFB74D),
                                 fontSize = 11.sp
                             )
@@ -273,7 +348,7 @@ fun JointStabilityRow(joint: String, status: String, statusColor: Color) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(joint, color = Color.LightGray, fontSize = 13.sp)
+        Text(joint, color = Color.LightGray, fontSize = 12.sp)
         Text(status, color = statusColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
     }
 }

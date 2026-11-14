@@ -7,182 +7,174 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.fitlens.app.camera.CameraPreviewView
-import com.fitlens.app.camera.DualStreamAnalyzer
-import com.fitlens.app.pose.PoseLandmarkManager
+import com.fitlens.app.ui.ProfileAndPrivacySheet
+import com.fitlens.app.ui.SensingConsentDialog
 import com.fitlens.app.ui.WorkoutAnalyticsScreen
 import com.fitlens.app.ui.WorkoutDestination
 import com.fitlens.app.ui.WorkoutSummaryScreen
 import com.fitlens.app.ui.WorkoutViewModel
-import com.fitlens.app.vitals.PresageFrameAnalyzer
-import com.fitlens.app.vitals.PresageManager
 import com.presagetech.smartspectra.ProcessingStatus
-import com.presagetech.smartspectra.SmartSpectraConfig
 import com.presagetech.smartspectra.SmartSpectraSdk
-import com.presagetech.smartspectra.proto.MetricTypesProto.MetricType
-import com.presagetech.smartspectra.proto.MetricsProto.ExpressionType
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.roundToInt
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Colour palette (matches the official SmartSpectra sample look)
-// ─────────────────────────────────────────────────────────────────────────────
 private val CORAL   = Color(0xFFFF6B6B)
 private val TEAL    = Color(0xFF4FCCC4)
 private val VIOLET  = Color(0xFFA58CF9)
 private val MINT    = Color(0xFF6EE7B7)
 private val AMBER   = Color(0xFFFBBF24)
 private val CARD_BG = Color(0xE61A2233)
-private val BG_TOP  = Color(0xFF0B1020)
 private val BG_BOT  = Color(0xFF05070C)
 
 /**
- * Single-screen Activity — CameraX preview fills the screen; metric cards
- * live at the bottom. No navigation stack, no multi-screen enum.
+ * Single-Activity host sharing a unified CameraX + DualStreamAnalyzer + SmartSpectra
+ * pipeline through [WorkoutViewModel].
  *
- * Architecture: Uses CameraX for preview + ImageAnalysis, with DualStreamAnalyzer
- * dispatching each frame to both SmartSpectra (vitals) and MediaPipe (pose).
- * SmartSpectra receives frames via useCustomInput() (headless mode) — the SDK's
- * built-in camera is NOT used, avoiding camera device lock contention.
- *
- * SDK lifecycle:
- *   onCreate  → configure SmartSpectraSdk (api key, metrics) via PresageManager
- *   onPause   → stop the SDK pipeline (camera releases)
- *   Start btn → request camera permission if needed, then sdk.start()
- *   Stop btn  → sdk.stop() + resetCustomInput() for clean next session
- *
- * All metric values come from sdk.metrics LiveData, observed as Compose State
- * via observeAsState().
+ * Camera & physiological sensing is strictly gated behind explicit user consent
+ * ([UserProfile.hasAcceptedSensingConsent]) and runtime CAMERA permission.
  */
 class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val WAVEFORM_BUFFER_SIZE = 200
     }
 
     private val sdk by lazy { SmartSpectraSdk.shared }
-    private val presageManager = PresageManager()
-    private val presageAnalyzer by lazy { PresageFrameAnalyzer() }
-    private val poseManager by lazy { PoseLandmarkManager(this) }
-    // This screen only displays SmartSpectra vitals — pose analysis is disabled
-    // to avoid running MediaPipe inference (and discarding the results) every frame.
-    private val dualStreamAnalyzer by lazy {
-        DualStreamAnalyzer(
-            presageAnalyzer = presageAnalyzer,
-            poseManager = poseManager,
-            enablePoseAnalysis = false
-        )
-    }
+    private val sdkLifecycleMutex = Mutex()
+    private val workoutViewModel: WorkoutViewModel by viewModels()
+    private val hasCameraPermissionState = mutableStateOf(false)
 
-    // Camera permission launcher
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startMeasurement()
+        hasCameraPermissionState.value = granted
+        if (granted && workoutViewModel.userProfile.value.hasAcceptedSensingConsent) {
+            startMeasurement()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ── Configure SDK once via PresageManager ─────────────────────────
-        presageManager.initializeSdk()
+        hasCameraPermissionState.value = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        workoutViewModel.presageManager.initializeSdk(
+            enableTelemetry = workoutViewModel.userProfile.value.smartSpectraTelemetryEnabled
+        )
 
         setContent { FitLensNavHost() }
     }
 
+    override fun onResume() {
+        super.onResume()
+        hasCameraPermissionState.value = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     override fun onPause() {
         super.onPause()
+        stopMeasurement()
+    }
+
+    private fun stopMeasurement() {
         lifecycleScope.launch {
-            when (sdk.processingStatus.value) {
-                ProcessingStatus.RUNNING,
-                ProcessingStatus.STARTING,
-                ProcessingStatus.STOPPING -> {
-                    runCatching { sdk.stop() }
-                    // Reset the cached CustomInput handle so the next session gets a fresh one
-                    presageAnalyzer.resetCustomInput()
+            sdkLifecycleMutex.withLock {
+                when (sdk.processingStatus.value) {
+                    ProcessingStatus.RUNNING,
+                    ProcessingStatus.STARTING,
+                    ProcessingStatus.STOPPING -> {
+                        runCatching { sdk.stop() }
+                        workoutViewModel.resetVitalsInput()
+                    }
+                    else -> Unit
                 }
-                else -> Unit
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // SDK control helpers
-    // ─────────────────────────────────────────────────────────────────────
-
-    private fun toggleMeasurement() {
-        when (sdk.processingStatus.value) {
-            ProcessingStatus.RUNNING -> lifecycleScope.launch {
-                runCatching { sdk.stop() }
-                presageAnalyzer.resetCustomInput()
-            }
-            ProcessingStatus.STARTING, ProcessingStatus.STOPPING -> Unit
-            else -> {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                    != PackageManager.PERMISSION_GRANTED
-                ) {
-                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                } else {
-                    startMeasurement()
-                }
-            }
+    private fun ensurePermissionAndStartMeasurement() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        } else {
+            hasCameraPermissionState.value = true
+            startMeasurement()
         }
     }
 
     private fun startMeasurement() {
+        if (!workoutViewModel.userProfile.value.hasAcceptedSensingConsent) return
         lifecycleScope.launch {
-            runCatching {
-                // Reset the custom input handle before starting a new session
-                presageAnalyzer.resetCustomInput()
-                sdk.start()
-                Log.d(TAG, "SmartSpectra SDK started (custom input mode)")
-            }.onFailure { e ->
-                Log.e(TAG, "Failed to start SmartSpectra SDK", e)
+            sdkLifecycleMutex.withLock {
+                if (!workoutViewModel.userProfile.value.hasAcceptedSensingConsent) return@withLock
+                if (sdk.processingStatus.value == ProcessingStatus.RUNNING ||
+                    sdk.processingStatus.value == ProcessingStatus.STARTING
+                ) {
+                    return@withLock
+                }
+                runCatching {
+                    workoutViewModel.prepareVitalsCustomInput()
+                    sdk.start()
+                    Log.d(TAG, "SmartSpectra SDK started (custom input mode)")
+                }.onFailure { e ->
+                    Log.e(TAG, "Failed to start SmartSpectra SDK", e)
+                }
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Navigation
-    // ─────────────────────────────────────────────────────────────────────
-
-    /**
-     * Top-level navigation: vitals dashboard -> workout flow / analytics / summary.
-     * WorkoutViewModel is activity-scoped so workout state survives navigation.
-     */
     @Composable
     private fun FitLensNavHost() {
         val navController = rememberNavController()
-        val workoutViewModel: WorkoutViewModel = viewModel()
 
         NavHost(navController = navController, startDestination = "vitals") {
             composable("vitals") {
                 FitLensScreen(
+                    viewModel = workoutViewModel,
                     onStartWorkout = { navController.navigate("workout") },
                     onOpenAnalytics = { navController.navigate("analytics") }
                 )
@@ -191,13 +183,8 @@ class MainActivity : ComponentActivity() {
                 WorkoutDestination(
                     navController = navController,
                     viewModel = workoutViewModel,
-                    onStartVitals = { startMeasurement() },
-                    onStopVitals = {
-                        lifecycleScope.launch {
-                            runCatching { sdk.stop() }
-                            presageAnalyzer.resetCustomInput()
-                        }
-                    }
+                    onStartVitals = { ensurePermissionAndStartMeasurement() },
+                    onStopVitals = { stopMeasurement() }
                 )
             }
             composable("summary") {
@@ -216,173 +203,249 @@ class MainActivity : ComponentActivity() {
             }
             composable("analytics") {
                 val sessions by workoutViewModel.workoutHistory.collectAsState()
+                val faults by workoutViewModel.allBiomechanicalFaults.collectAsState()
                 val insight by workoutViewModel.latestInsight.collectAsState()
                 WorkoutAnalyticsScreen(
                     sessions = sessions,
+                    faults = faults,
                     insight = insight,
+                    onDeleteAllData = { workoutViewModel.deleteAllLocalData() },
                     onBack = { navController.popBackStack() }
                 )
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Compose UI
-    // ─────────────────────────────────────────────────────────────────────
-
     @Composable
     private fun FitLensScreen(
+        viewModel: WorkoutViewModel,
         onStartWorkout: () -> Unit = {},
         onOpenAnalytics: () -> Unit = {}
     ) {
-        // ── Observe SDK LiveData as Compose State ─────────────────────────
         val processingStatus by sdk.processingStatus.observeAsState(ProcessingStatus.IDLE)
         val validationStatus by sdk.validationStatus.observeAsState(null)
-        val sdkError         by sdk.error.observeAsState(null)
-        val metrics          by sdk.metrics.observeAsState(null)
+        val sdkError by sdk.error.observeAsState(null)
 
-        // Retain last valid metric values (SDK docs recommend this pattern)
-        var pulseRate    by remember { mutableStateOf<Double?>(null) }
-        var breathRate   by remember { mutableStateOf<Double?>(null) }
-        var hrvRmssd     by remember { mutableStateOf<Double?>(null) }
-        var expression   by remember { mutableStateOf<String?>(null) }
-        val pressureBuf  = remember { mutableStateListOf<Float>() }
-        val chestBuf     = remember { mutableStateListOf<Float>() }
-        val abdomenBuf   = remember { mutableStateListOf<Float>() }
-        var latestPressureTs by remember { mutableLongStateOf(Long.MIN_VALUE) }
-        var latestChestTs    by remember { mutableLongStateOf(Long.MIN_VALUE) }
-        var latestAbdomenTs  by remember { mutableLongStateOf(Long.MIN_VALUE) }
+        val vitals by viewModel.vitalsFlow.collectAsState()
+        val profile by viewModel.userProfile.collectAsState()
+        val smokeTestResult by viewModel.smokeTestResult.collectAsState()
+        val isRunningSmokeTest by viewModel.isRunningSmokeTest.collectAsState()
+        val hasCameraPerm by hasCameraPermissionState
 
-        // When processing restarts, clear retained values
-        LaunchedEffect(processingStatus) {
-            if (processingStatus == ProcessingStatus.STARTING) {
-                pulseRate = null; breathRate = null; hrvRmssd = null; expression = null
-                pressureBuf.clear(); chestBuf.clear(); abdomenBuf.clear()
-                latestPressureTs = Long.MIN_VALUE
-                latestChestTs    = Long.MIN_VALUE
-                latestAbdomenTs  = Long.MIN_VALUE
-            }
+        var showConsentDialog by remember { mutableStateOf(false) }
+        var pendingStartAfterConsent by remember { mutableStateOf(false) }
+        var showProfileSheet by remember { mutableStateOf(false) }
+
+        // Disable MediaPipe pose inference on the vitals-only dashboard screen
+        LaunchedEffect(Unit) {
+            viewModel.setPoseAnalysisEnabled(false)
         }
 
-        // Decode sdk.metrics payload (follows official recommended pattern)
-        LaunchedEffect(metrics) {
-            val m = metrics ?: return@LaunchedEffect
-            if (m.hasCardio()) {
-                m.cardio.pulseRateList.lastOrNull { it.timestamp > 0 }?.value?.let { pulseRate = it.toDouble() }
-                m.cardio.hrvList.lastOrNull { it.rmssd > 0 }?.rmssd?.let { hrvRmssd = it }
-                latestPressureTs = drainTraceWindow(
-                    samples = m.cardio.arterialPressureTraceList,
-                    latestTimestamp = latestPressureTs,
-                    buffer = pressureBuf,
-                    timestampOf = { it.timestamp },
-                    valueOf = { it.value }
-                )
-            }
-            if (m.hasBreathing()) {
-                m.breathing.rateList.lastOrNull()?.value?.let { breathRate = it.toDouble() }
-                latestChestTs = drainTraceWindow(
-                    samples = m.breathing.upperTraceList,
-                    latestTimestamp = latestChestTs,
-                    buffer = chestBuf,
-                    timestampOf = { it.timestamp },
-                    valueOf = { it.value }
-                )
-                latestAbdomenTs = drainTraceWindow(
-                    samples = m.breathing.lowerTraceList,
-                    latestTimestamp = latestAbdomenTs,
-                    buffer = abdomenBuf,
-                    timestampOf = { it.timestamp },
-                    valueOf = { it.value }
-                )
-            }
-            if (m.hasFace()) {
-                m.face.expressionList.lastOrNull()?.scoresList
-                    ?.filter { it.confidence > 0f }
-                    ?.maxByOrNull { it.confidence }
-                    ?.let { top -> expression = top.type.friendlyName() }
-            }
+        if (showConsentDialog) {
+            SensingConsentDialog(
+                initialTelemetryEnabled = profile.smartSpectraTelemetryEnabled,
+                initialPreferLocalEdgeAi = profile.preferLocalEdgeAi,
+                onAccept = { telemetryEnabled, preferLocalEdge ->
+                    viewModel.acceptSensingConsent(telemetryEnabled, preferLocalEdge)
+                    showConsentDialog = false
+                    if (pendingStartAfterConsent) {
+                        pendingStartAfterConsent = false
+                        ensurePermissionAndStartMeasurement()
+                    }
+                },
+                onDismiss = {
+                    showConsentDialog = false
+                    pendingStartAfterConsent = false
+                }
+            )
         }
 
-        // ── Layout ────────────────────────────────────────────────────────
+        if (showProfileSheet) {
+            ProfileAndPrivacySheet(
+                profile = profile,
+                smokeTestResult = smokeTestResult,
+                isRunningSmokeTest = isRunningSmokeTest,
+                onSaveProfile = { updated -> viewModel.updateUserProfile(updated) },
+                onRunSmokeTest = { viewModel.runSmokeTest() },
+                onDeleteAllData = { viewModel.deleteAllLocalData() },
+                onDismiss = { showProfileSheet = false }
+            )
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(BG_BOT)
         ) {
-            // Camera preview fills the screen using CameraX + DualStreamAnalyzer
-            CameraPreviewView(
-                analyzer = dualStreamAnalyzer,
-                useFrontCamera = true,
-                modifier = Modifier.fillMaxSize()
-            )
+            // Camera preview binds strictly after explicit consent + camera permission
+            if (profile.hasAcceptedSensingConsent && hasCameraPerm) {
+                CameraPreviewView(
+                    analyzer = viewModel.dualStreamAnalyzer,
+                    useFrontCamera = true,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                ConsentGatedCameraBackdrop(
+                    hasAcceptedConsent = profile.hasAcceptedSensingConsent,
+                    onReviewConsent = {
+                        pendingStartAfterConsent = true
+                        showConsentDialog = true
+                    },
+                    onGrantCamera = { ensurePermissionAndStartMeasurement() }
+                )
+            }
 
-            // Dark gradient scrim so cards are readable
+            // Gradient scrim for legible metric cards
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0f to Color.Transparent,
-                            0.55f to Color.Transparent,
+                        Brush.verticalGradient(
+                            0f to BG_BOT.copy(alpha = 0.55f),
+                            0.35f to Color.Transparent,
                             1f to BG_BOT.copy(alpha = 0.97f)
                         )
                     )
             )
 
-            // Status + control bar at the top
-            StatusBar(
-                status = processingStatus,
-                validationHint = validationStatus?.hint.orEmpty(),
-                errorMessage = sdkError?.message,
+            // Top bar: SDK status, validation hint, AI Insight button & Profile/Privacy sheet
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            )
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusChip(
+                        label = when (processingStatus) {
+                            ProcessingStatus.IDLE     -> "SmartSpectra Idle"
+                            ProcessingStatus.STARTING -> "Starting…"
+                            ProcessingStatus.RUNNING  -> "Live rPPG Sensing"
+                            ProcessingStatus.STOPPING -> "Stopping…"
+                            ProcessingStatus.ERROR    -> sdkError?.message ?: "SDK Error"
+                        },
+                        accent = when (processingStatus) {
+                            ProcessingStatus.RUNNING  -> MINT
+                            ProcessingStatus.ERROR    -> CORAL
+                            ProcessingStatus.STARTING,
+                            ProcessingStatus.STOPPING -> AMBER
+                            else -> Color.LightGray
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
 
-            // Metric cards at the bottom
+                    Surface(
+                        modifier = Modifier.clickable { viewModel.requestSmartSpectraInsight() },
+                        shape = RoundedCornerShape(18.dp),
+                        color = VIOLET.copy(alpha = 0.22f),
+                        border = BorderStroke(1.dp, VIOLET.copy(alpha = 0.6f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = VIOLET, modifier = Modifier.size(14.dp))
+                            Text("Insight", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = VIOLET)
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { showProfileSheet = true },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(17.dp))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ManageAccounts,
+                            contentDescription = "Profile & Privacy Settings",
+                            tint = MINT,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                val activeHint = validationStatus?.hint?.takeIf { it.isNotEmpty() }
+                    ?: vitals.validationHint.takeIf { it.isNotEmpty() }
+                if (activeHint != null) {
+                    StatusChip(
+                        label = "Framing: $activeHint",
+                        accent = AMBER,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else if (viewModel.presageManager.isPlaceholderKey()) {
+                    StatusChip(
+                        label = "Setup note: Add PRESAGE_API_KEY in secrets.properties (or run Smoke Test in Profile)",
+                        accent = AMBER,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            // Bottom telemetry & navigation deck
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                // Row 1 — Pulse + Breathing
+                vitals.smartSpectraLlmInsight?.takeIf { it.isNotBlank() }?.let { insightText ->
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xE61F293D),
+                        border = BorderStroke(1.dp, VIOLET.copy(alpha = 0.45f))
+                    ) {
+                        Text(
+                            text = "✨ $insightText",
+                            fontSize = 11.sp,
+                            color = Color(0xFFE2E8F0),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+
+                // Row 1 — Pulse + Karvonen Zone & Breathing Rate
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     MetricCard(
-                        label = "Pulse Rate",
-                        value = pulseRate?.let { "${it.roundToInt()} bpm" } ?: "-- bpm",
+                        label = "Pulse • ${vitals.heartRateZone.label}",
+                        value = if (vitals.heartRateBpm > 0) "${vitals.heartRateBpm.roundToInt()} bpm" else "-- bpm",
                         accent = CORAL,
                         modifier = Modifier.weight(1f)
                     )
                     MetricCard(
                         label = "Breathing Rate",
-                        value = breathRate?.let { "${it.roundToInt()} bpm" } ?: "-- bpm",
+                        value = if (vitals.breathingRateBpm > 0) "${vitals.breathingRateBpm.roundToInt()} brpm" else "-- brpm",
                         accent = TEAL,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                // Row 2 — HRV + Expression
+                // Row 2 — HRV RMSSD + Facial Expression
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     MetricCard(
                         label = "HRV RMSSD",
-                        value = hrvRmssd?.let { "${"%.1f".format(it)} ms" } ?: "-- ms",
+                        value = if (vitals.heartRateVariabilityMs > 0) "${"%.1f".format(vitals.heartRateVariabilityMs)} ms" else "-- ms",
                         accent = MINT,
                         modifier = Modifier.weight(1f)
                     )
                     MetricCard(
                         label = "Expression",
-                        value = expression ?: "--",
+                        value = vitals.facialExpression ?: "--",
                         accent = AMBER,
                         modifier = Modifier.weight(1f)
                     )
@@ -390,12 +453,12 @@ class MainActivity : ComponentActivity() {
 
                 // Arterial pressure waveform
                 WaveformCard(
-                    label = "Arterial Pressure",
-                    samples = pressureBuf,
+                    label = "Arterial Pressure Trace (Relative Pulse Shape)",
+                    samples = vitals.arterialPressureTrace,
                     lineColor = VIOLET,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(80.dp)
+                        .height(74.dp)
                 )
 
                 // Breathing waveforms
@@ -404,24 +467,24 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     WaveformCard(
-                        label = "Chest",
-                        samples = chestBuf,
+                        label = "Chest Trace",
+                        samples = vitals.chestBreathingTrace,
                         lineColor = TEAL,
                         modifier = Modifier
                             .weight(1f)
-                            .height(70.dp)
+                            .height(64.dp)
                     )
                     WaveformCard(
-                        label = "Abdomen",
-                        samples = abdomenBuf,
+                        label = "Abdomen Trace",
+                        samples = vitals.abdomenBreathingTrace,
                         lineColor = Color(0xFF60A5FA),
                         modifier = Modifier
                             .weight(1f)
-                            .height(70.dp)
+                            .height(64.dp)
                     )
                 }
 
-                // App navigation: Workout flow + Analytics
+                // Navigation: Workout Flow + Analytics Vault
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -430,7 +493,7 @@ class MainActivity : ComponentActivity() {
                         onClick = onStartWorkout,
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp),
+                            .height(46.dp),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = VIOLET)
                     ) {
@@ -445,21 +508,34 @@ class MainActivity : ComponentActivity() {
                         onClick = onOpenAnalytics,
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp),
+                            .height(46.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text("Analytics", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                        Text("Local Vault & Stats", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
                     }
                 }
 
-                // Start / Stop button
+                // Start / Stop Measurement button (consent-gated)
                 Button(
-                    onClick = { toggleMeasurement() },
+                    onClick = {
+                        when (processingStatus) {
+                            ProcessingStatus.RUNNING -> stopMeasurement()
+                            ProcessingStatus.STARTING, ProcessingStatus.STOPPING -> Unit
+                            else -> {
+                                if (!profile.hasAcceptedSensingConsent) {
+                                    pendingStartAfterConsent = true
+                                    showConsentDialog = true
+                                } else {
+                                    ensurePermissionAndStartMeasurement()
+                                }
+                            }
+                        }
+                    },
                     enabled = processingStatus != ProcessingStatus.STARTING &&
                               processingStatus != ProcessingStatus.STOPPING,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
+                        .height(50.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = when (processingStatus) {
@@ -469,99 +545,84 @@ class MainActivity : ComponentActivity() {
                     )
                 ) {
                     Text(
-                        text = when (processingStatus) {
-                            ProcessingStatus.IDLE, ProcessingStatus.ERROR -> "Start Measurement"
-                            ProcessingStatus.STARTING -> "Starting…"
-                            ProcessingStatus.RUNNING  -> "Stop"
-                            ProcessingStatus.STOPPING -> "Stopping…"
+                        text = when {
+                            processingStatus == ProcessingStatus.RUNNING -> "Stop Measurement"
+                            processingStatus == ProcessingStatus.STARTING -> "Starting…"
+                            processingStatus == ProcessingStatus.STOPPING -> "Stopping…"
+                            !profile.hasAcceptedSensingConsent -> "Consent & Start Measurement"
+                            else -> "Start Measurement"
                         },
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         color = Color.Black
                     )
                 }
+
+                Text(
+                    text = "Wellness & fitness coaching only • Not a medical device • 100% local SQLite storage",
+                    fontSize = 10.sp,
+                    color = Color.White.copy(alpha = 0.45f),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Trace draining helper
-    // ─────────────────────────────────────────────────────────────────────
-
-    /**
-     * Appends only the samples newer than [latestTimestamp] to [buffer] and
-     * returns the newest timestamp seen. SDK traces are cumulative and
-     * time-ordered, so scanning backwards and stopping at the first already-seen
-     * timestamp costs O(new samples) per emission instead of O(entire trace).
-     */
-    private fun <T> drainTraceWindow(
-        samples: List<T>,
-        latestTimestamp: Long,
-        buffer: MutableList<Float>,
-        timestampOf: (T) -> Long,
-        valueOf: (T) -> Float
-    ): Long {
-        if (samples.isEmpty()) return latestTimestamp
-
-        val fresh = ArrayList<Float>(16)
-        var newestTs = latestTimestamp
-        var i = samples.size - 1
-        while (i >= 0) {
-            val ts = timestampOf(samples[i])
-            if (ts <= latestTimestamp) break
-            newestTs = maxOf(newestTs, ts)
-            fresh.add(valueOf(samples[i]))
-            i--
-        }
-        if (fresh.isEmpty()) return latestTimestamp
-
-        // fresh holds newest→oldest; append oldest→newest to keep the waveform ordered.
-        for (j in fresh.indices.reversed()) {
-            buffer.add(fresh[j])
-        }
-        while (buffer.size > WAVEFORM_BUFFER_SIZE) buffer.removeAt(0)
-        return newestTs
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Reusable composables
-    // ─────────────────────────────────────────────────────────────────────
-
     @Composable
-    private fun StatusBar(
-        status: ProcessingStatus,
-        validationHint: String,
-        errorMessage: String?,
-        modifier: Modifier = Modifier
+    private fun ConsentGatedCameraBackdrop(
+        hasAcceptedConsent: Boolean,
+        onReviewConsent: () -> Unit,
+        onGrantCamera: () -> Unit
     ) {
-        Row(
-            modifier = modifier,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0B1020)),
+            contentAlignment = Alignment.Center
         ) {
-            StatusChip(
-                label = when (status) {
-                    ProcessingStatus.IDLE     -> "Idle"
-                    ProcessingStatus.STARTING -> "Starting"
-                    ProcessingStatus.RUNNING  -> "Running"
-                    ProcessingStatus.STOPPING -> "Stopping"
-                    ProcessingStatus.ERROR    -> errorMessage ?: "Error"
-                },
-                accent = when (status) {
-                    ProcessingStatus.RUNNING  -> MINT
-                    ProcessingStatus.ERROR    -> CORAL
-                    ProcessingStatus.STARTING,
-                    ProcessingStatus.STOPPING -> AMBER
-                    else -> Color.Gray
-                },
-                modifier = Modifier.weight(1f)
-            )
-            if (validationHint.isNotEmpty()) {
-                StatusChip(
-                    label = validationHint,
-                    accent = AMBER,
-                    modifier = Modifier.weight(1f)
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 28.dp)
+                    .offset(y = (-90).dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = if (hasAcceptedConsent) Icons.Default.Videocam else Icons.Default.Shield,
+                    contentDescription = null,
+                    tint = MINT,
+                    modifier = Modifier.size(40.dp)
                 )
+                Text(
+                    text = if (!hasAcceptedConsent)
+                        "Consent-First Human Sensing"
+                    else
+                        "Camera Permission Needed",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+                Text(
+                    text = if (!hasAcceptedConsent)
+                        "Camera remains off until you review data handling and enable on-device SmartSpectra vitals sensing."
+                    else
+                        "Grant camera permission to stream frames locally to SmartSpectra and MediaPipe.",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+                OutlinedButton(
+                    onClick = if (!hasAcceptedConsent) onReviewConsent else onGrantCamera,
+                    border = BorderStroke(1.dp, MINT)
+                ) {
+                    Text(
+                        if (!hasAcceptedConsent) "Review Consent & Privacy" else "Grant Camera Access",
+                        color = MINT,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp
+                    )
+                }
             }
         }
     }
@@ -576,7 +637,7 @@ class MainActivity : ComponentActivity() {
         ) {
             Text(
                 text = label,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = accent,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -594,13 +655,19 @@ class MainActivity : ComponentActivity() {
     ) {
         Surface(
             modifier = modifier,
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(16.dp),
             color = CARD_BG
         ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(label, fontSize = 11.sp, color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = accent)
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                Text(
+                    label,
+                    fontSize = 10.sp,
+                    color = Color.White.copy(alpha = 0.62f),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = accent)
             }
         }
     }
@@ -614,12 +681,12 @@ class MainActivity : ComponentActivity() {
     ) {
         Surface(
             modifier = modifier,
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(16.dp),
             color = CARD_BG
         ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(label, fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f), fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(4.dp))
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+                Text(label, fontSize = 10.sp, color = Color.White.copy(alpha = 0.7f), fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(3.dp))
                 WaveformCanvas(
                     samples = samples,
                     lineColor = lineColor,
@@ -646,10 +713,6 @@ class MainActivity : ComponentActivity() {
             val maxV = samples.max()
             val range = if (maxV - minV == 0f) 1f else maxV - minV
 
-            // Subtle grid
-            val gridPaint = androidx.compose.ui.graphics.Paint().apply {
-                color = Color.White.copy(alpha = 0.06f)
-            }
             repeat(3) { i ->
                 val y = inset + (h - 2 * inset) * (1f - (i + 1) / 4f)
                 drawLine(
@@ -660,7 +723,6 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            // Signal line
             val path = Path()
             samples.forEachIndexed { idx, v ->
                 val x = inset + (w - 2 * inset) * idx / (samples.size - 1)
@@ -669,25 +731,9 @@ class MainActivity : ComponentActivity() {
             }
             drawPath(
                 path = path,
-                color = lineColor.copy(alpha = 0.85f),
+                color = lineColor.copy(alpha = 0.88f),
                 style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
             )
         }
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Extension helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-private fun ExpressionType.friendlyName(): String? = when (this) {
-    ExpressionType.HAPPY     -> "Happy"
-    ExpressionType.NEUTRAL   -> "Neutral"
-    ExpressionType.SAD       -> "Sad"
-    ExpressionType.ANGRY     -> "Angry"
-    ExpressionType.SURPRISE  -> "Surprise"
-    ExpressionType.FEAR      -> "Fear"
-    ExpressionType.DISGUST   -> "Disgust"
-    ExpressionType.CONTEMPT  -> "Contempt"
-    else -> null
 }

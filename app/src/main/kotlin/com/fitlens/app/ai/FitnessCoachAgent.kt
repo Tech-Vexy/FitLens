@@ -11,12 +11,9 @@ import com.fitlens.app.ai.adk.FirebaseGeminiAdapter
 /**
  * FitnessCoachAgent encapsulates agent definition and execution orchestration using ADK Kotlin.
  *
- * Supported Authentication & Model Backends:
- * 1. Firebase AI Logic + App Check (Android production):
- *    - Uses the Agent Platform Gemini API through Firebase AI Logic.
- *    - Zero client API key in APK; gated by Play Integrity.
- * 2. On-Device Edge Sub-Agent:
- *    - Uses EdgeGeminiNanoAdapter for zero-latency, local privacy-preserving execution.
+ * Privacy boundary: Biometric and physiological vitals (pulse, breathing rate, HRV, expressions,
+ * skeletal landmarks) NEVER leave the device. Cloud prompts (when Firebase AI Logic is enabled)
+ * contain strictly non-biometric workout preferences (goal, experience, equipment, duration).
  */
 class FitnessCoachAgent(
     private val tools: FitnessTools = FitnessTools(),
@@ -32,16 +29,23 @@ class FitnessCoachAgent(
             You are the FitLens AI Fitness and Biomechanics Coach built with Google ADK Kotlin.
             Use provided tools for plan generation, session analysis, adaptive rest recovery,
             and physiological/biomechanical safety feedback.
-            Never diagnose medical conditions or advise against physician guidance.
-            Always prioritize biomechanical safety and user safety thresholds.
+            Never diagnose medical conditions, claim clinical treatment, or advise against physician guidance.
+            Always prioritize biomechanical safety and non-medical wellness coaching.
         """
     }
 
-    // ADK Kotlin LlmAgent specification
-    val rootAgent: AdkLlmAgent = AdkLlmAgent(
+    var rootAgent: AdkLlmAgent = buildAgent(initialAuthMode)
+        private set
+
+    val runner: AdkInMemoryRunner = AdkInMemoryRunner(
+        agent = rootAgent,
+        appName = "FitLens"
+    )
+
+    private fun buildAgent(mode: AdkAuthMode): AdkLlmAgent = AdkLlmAgent(
         name = AGENT_NAME,
         description = "Personalized fitness and biomechanics coach for FitLens.",
-        model = when (initialAuthMode) {
+        model = when (mode) {
             AdkAuthMode.FIREBASE_AI_LOGIC -> FirebaseGeminiAdapter(modelName = MODEL_GEMINI_FLASH)
             AdkAuthMode.ON_DEVICE_EDGE -> EdgeGeminiNanoAdapter(modelName = MODEL_GEMINI_NANO)
         },
@@ -49,14 +53,20 @@ class FitnessCoachAgent(
         tools = listOf(tools)
     )
 
-    // In-memory runner for coroutine execution
-    val runner: AdkInMemoryRunner = AdkInMemoryRunner(
-        agent = rootAgent,
-        appName = "FitLens"
-    )
+    /**
+     * Switches the active ADK backend between Firebase AI Logic and 100% On-Device Edge.
+     */
+    @Synchronized
+    fun setAuthMode(mode: AdkAuthMode) {
+        if (rootAgent.model.authMode == mode) return
+        rootAgent = buildAgent(mode)
+        runner.agent = rootAgent
+        Log.i(TAG, "Switched FitnessCoachAgent backend to $mode (${rootAgent.model.modelName})")
+    }
 
     /**
-     * Executes plan generation via the ADK Kotlin Agent and tools.
+     * Executes plan generation via the ADK Kotlin Agent and merges any LLM coaching rationale.
+     * Only non-biometric workout preferences are included in the prompt.
      */
     suspend fun requestWorkoutPlan(
         goal: String,
@@ -65,12 +75,20 @@ class FitnessCoachAgent(
         durationMinutes: Int
     ): WorkoutPlanResult {
         Log.i(TAG, "Requesting workout plan via ${rootAgent.name} [Auth: ${rootAgent.model.authMode}]")
-        runner.execute("Generate workout plan for goal=$goal, experience=$experience, equipment=$equipment, duration=$durationMinutes")
-        return tools.generateWorkoutPlan(goal, experience, equipment, durationMinutes)
+        val prompt =
+            "Generate a concise coaching cue (1-2 sentences, wellness-only, no medical claims) for a " +
+            "$durationMinutes minute $goal workout for an $experience athlete using $equipment."
+        val agentResponse = runCatching { runner.execute(prompt) }.getOrNull().orEmpty().trim()
+        val structured = tools.generateWorkoutPlan(goal, experience, equipment, durationMinutes)
+        return if (agentResponse.isNotBlank()) {
+            structured.copy(aiCoachRationale = agentResponse.take(260))
+        } else {
+            structured
+        }
     }
 
     /**
-     * Executes post-workout session evaluation with physiological and pose metrics.
+     * Executes post-workout session evaluation strictly locally (zero cloud vitals transmission).
      */
     suspend fun evaluateSession(
         durationSeconds: Int,
@@ -78,27 +96,25 @@ class FitnessCoachAgent(
         formDeviations: Int
     ): SessionAnalysisResult {
         Log.i(TAG, "Evaluating session locally with vitals: $avgHrBpm bpm, deviations: $formDeviations")
-        // Health telemetry remains local-only; do not send it to Firebase AI Logic.
         return tools.analyzeSession(durationSeconds, avgHrBpm, formDeviations)
     }
 
     /**
-     * Dynamically adapts rest duration using real-time vitals.
-     * Can execute on Edge Sub-Agent (Gemini Nano) for instant zero-latency response.
+     * Dynamically adapts rest duration using real-time vitals locally on-device.
      */
     suspend fun calculateAdaptiveRest(
         baseRestSeconds: Int,
         currentHeartRateBpm: Double,
+        restingHeartRateBpm: Double = 70.0,
         preferLocal: Boolean = true
     ): RestAdjustmentResult {
         val mode = if (preferLocal) AdkAuthMode.ON_DEVICE_EDGE else rootAgent.model.authMode
         Log.i(TAG, "Evaluating adaptive rest ($mode) for HR: $currentHeartRateBpm bpm")
-        return tools.calculateAdaptiveRest(baseRestSeconds, currentHeartRateBpm)
+        return tools.calculateAdaptiveRest(baseRestSeconds, currentHeartRateBpm, restingHeartRateBpm)
     }
 
     /**
-     * Evaluates biomechanical fatigue during an active set.
-     * Always handled locally at the edge for sub-10ms safety reaction time.
+     * Evaluates biomechanical fatigue during an active set locally at the edge (<10ms).
      */
     suspend fun checkBiomechanicalFatigue(
         consecutiveDeviations: Int,
@@ -110,7 +126,25 @@ class FitnessCoachAgent(
     }
 
     /**
-     * Generates a multi-week periodization mesocycle via Gemini 3.8 Flash (Firebase AI Logic / ADC).
+     * Synthesizes all 4 SmartSpectra live signals (pulse, breathing, HRV, expressions)
+     * strictly locally on-device.
+     */
+    fun evaluateBiofeedback(
+        heartRateBpm: Double,
+        breathingRateBpm: Double,
+        hrvRmssdMs: Double,
+        facialExpression: String?
+    ): BiofeedbackCoachingResult {
+        return tools.evaluateHolisticBiofeedback(
+            heartRateBpm = heartRateBpm,
+            breathingRateBpm = breathingRateBpm,
+            hrvRmssdMs = hrvRmssdMs,
+            facialExpression = facialExpression ?: "Neutral"
+        )
+    }
+
+    /**
+     * Generates a multi-week periodization mesocycle via ADK Agent (with offline Edge fallback).
      */
     suspend fun requestMesocyclePlan(
         goal: String,
@@ -118,7 +152,14 @@ class FitnessCoachAgent(
         frequencyPerWeek: Int = 3
     ): MesocyclePlanResult {
         Log.i(TAG, "Requesting $weeks-week mesocycle plan via ${rootAgent.name} ($goal)")
-        runner.execute("Generate $weeks-week periodization mesocycle for $goal at $frequencyPerWeek days/week")
-        return tools.generateMesocyclePeriodization(goal, weeks, frequencyPerWeek)
+        val prompt =
+            "Generate a $weeks-week periodization mesocycle overview for $goal at $frequencyPerWeek days/week."
+        val agentResponse = runCatching { runner.execute(prompt) }.getOrNull().orEmpty().trim()
+        val structured = tools.generateMesocyclePeriodization(goal, weeks, frequencyPerWeek)
+        return if (agentResponse.isNotBlank()) {
+            structured.copy(aiCoachRationale = agentResponse.take(260))
+        } else {
+            structured
+        }
     }
 }

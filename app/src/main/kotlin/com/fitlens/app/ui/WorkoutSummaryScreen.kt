@@ -2,7 +2,9 @@ package com.fitlens.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -11,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fitlens.app.data.model.WorkoutSessionEntity
@@ -25,17 +28,19 @@ fun WorkoutSummaryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF101010))
+            .background(Color(0xFF0E121B))
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(20.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -56,51 +61,49 @@ fun WorkoutSummaryScreen(
                     Text(
                         text = session?.exerciseName ?: "Workout",
                         fontSize = 14.sp,
-                        color = Color.LightGray
+                        color = Color(0xFF6EE7B7)
                     )
                 }
             }
 
-            // Key Stats Grid
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 SummaryMetricCard(
-                    title = "Total Reps",
+                    title = "Completed",
                     value = "${session?.completedReps ?: 0}",
                     modifier = Modifier.weight(1f)
                 )
                 SummaryMetricCard(
-                    title = "Form Accuracy",
+                    title = "Form Score",
                     value = "${session?.formAccuracyPercentage?.toInt() ?: 100}%",
                     valueColor = Color(0xFF00E676),
                     modifier = Modifier.weight(1f)
                 )
                 SummaryMetricCard(
-                    title = "Avg Heart Rate",
-                    value = "${session?.averageHeartRate?.toInt() ?: 0} bpm",
-                    valueColor = Color(0xFFFF5252),
+                    title = "Avg / Peak HR",
+                    value = "${session?.averageHeartRate?.toInt() ?: 0}/${session?.maxHeartRate?.toInt() ?: 0}",
+                    valueColor = Color(0xFFFF6B6B),
                     modifier = Modifier.weight(1f)
                 )
             }
 
-            // Coach Biomechanical & Physiological Summary
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF192131)),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "ADK Coach Evaluation",
-                        color = Color(0xFF00B0FF),
+                        text = "ADK Coach Biomechanical & Vitals Review",
+                        color = Color(0xFF4FCCC4),
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = session?.coachFeedback ?: "Session logged successfully with zero API keys.",
+                        text = session?.coachFeedback ?: "Session saved strictly to your on-device SQLite vault.",
                         color = Color.White,
                         fontSize = 13.sp
                     )
@@ -108,7 +111,7 @@ fun WorkoutSummaryScreen(
                     if ((session?.extendedRestSeconds ?: 0) > 0) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "⏱️ Vitals Intervention: +${session?.extendedRestSeconds}s adaptive rest added for cardiovascular recovery.",
+                            text = "⏱️ SmartSpectra Vitals Intervention: +${session?.extendedRestSeconds}s adaptive rest added during elevated heart rate.",
                             color = Color(0xFFFFB74D),
                             fontSize = 12.sp
                         )
@@ -116,11 +119,10 @@ fun WorkoutSummaryScreen(
                 }
             }
 
-            // Progressive Overload Next Step
             insight?.let { ins ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF263238)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1F2B3D)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -157,14 +159,25 @@ fun WorkoutSummaryScreen(
                     }
                 }
             }
+
+            Text(
+                text = "Saved strictly on-device in fitlens_health_sqlite.db • Fitness & wellness coaching only (not medical advice).",
+                color = Color.Gray,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
         Button(
             onClick = onReturnToDashboard,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
         ) {
-            Text("Return to Dashboard", color = Color.Black, fontWeight = FontWeight.Bold)
+            Text("Return to Vitals Dashboard", color = Color.Black, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -178,16 +191,16 @@ fun SummaryMetricCard(
 ) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF192131)),
         shape = RoundedCornerShape(10.dp)
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(title, color = Color.Gray, fontSize = 11.sp)
+            Text(title, color = Color.Gray, fontSize = 11.sp, maxLines = 1)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(value, color = valueColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(value, color = valueColor, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
         }
     }
 }

@@ -32,6 +32,9 @@ interface WorkoutDao {
     @Query("SELECT COUNT(*) FROM workout_sessions")
     suspend fun getTotalWorkoutCount(): Int
 
+    @Query("DELETE FROM workout_sessions")
+    suspend fun clearAllSessions(): Int
+
     // --- Local SQLite Physiological Vitals Time-Series ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVitalsLog(vitalsLog: VitalsLogEntity): Long
@@ -51,6 +54,9 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM local_biomechanical_faults WHERE sessionId = :sessionId ORDER BY timestampMs ASC")
     suspend fun getFaultsForSession(sessionId: Long): List<BiomechanicalFaultEntity>
+
+    @Query("SELECT * FROM local_biomechanical_faults ORDER BY timestampMs DESC")
+    fun getAllFaults(): Flow<List<BiomechanicalFaultEntity>>
 
     @Query("DELETE FROM local_vitals_telemetry")
     suspend fun clearAllLocalVitals(): Int
