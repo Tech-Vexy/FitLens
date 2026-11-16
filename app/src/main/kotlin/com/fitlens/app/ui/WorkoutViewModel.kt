@@ -5,22 +5,37 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Observer
 import androidx.lifecycle.viewModelScope
+import com.fitlens.app.ai.FitnessCoachAgent
+import com.fitlens.app.ai.FitnessTools
+import com.fitlens.app.ai.WorkoutPlanResult
+import com.fitlens.app.ai.adk.AdkAuthMode
 import com.fitlens.app.ai.live.BiometricTrendTracker
 import com.fitlens.app.ai.live.GeminiLiveAssistant
 import com.fitlens.app.ai.live.LiveAssistantState
 import com.fitlens.app.ai.live.LiveConnectionState
 import com.fitlens.app.ai.live.MoodSpeculation
 import com.fitlens.app.ai.live.MoodSpeculator
+import com.fitlens.app.audio.FitLensAudioCoach
 import com.fitlens.app.camera.DualStreamAnalyzer
 import com.fitlens.app.data.WorkoutDatabase
 import com.fitlens.app.data.WorkoutRepository
+import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserPreferencesRepository
 import com.fitlens.app.data.profile.UserProfile
+import com.fitlens.app.pose.DeviationSeverity
+import com.fitlens.app.pose.PoseAnalysisFrame
+import com.fitlens.app.pose.PoseLandmarkManager
+import com.fitlens.app.testing.HeadlessVideoFeeder
+import com.fitlens.app.testing.SmokeTestGateResult
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.vitals.PresageManager
+import com.fitlens.app.workout.WorkoutManager
+import com.fitlens.app.workout.WorkoutPhase
+import com.fitlens.app.workout.WorkoutState
 import com.presagetech.smartspectra.SmartSpectraSdk
 import com.presagetech.smartspectra.proto.InsightsProto
 import com.presagetech.smartspectra.proto.MetricsProto.ExpressionType
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,8 +58,42 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val liveAssistant = GeminiLiveAssistant()
     private val trendTracker = BiometricTrendTracker()
 
+    // Biomechanics coach: shared MediaPipe pose engine + deterministic workout
+    // state machine + on-device TTS cues. All processing stays on-device.
+    private val coachAgent = FitnessCoachAgent()
+    private val poseLandmarkManager = PoseLandmarkManager(application)
+    val workoutManager = WorkoutManager(
+        coachAgent = coachAgent,
+        poseLandmarkManager = poseLandmarkManager
+    )
+    private val audioCoach = FitLensAudioCoach(application)
+    private val headlessVideoFeeder = HeadlessVideoFeeder(vitalsAnalyzer, poseLandmarkManager)
+
     val vitalsFlow = vitalsAnalyzer.vitalsFlow
     val assistantState: StateFlow<LiveAssistantState> = liveAssistant.state
+    val workoutState: StateFlow<WorkoutState> = workoutManager.state
+
+    private val _generatedWorkoutPlan = MutableStateFlow(
+        FitnessTools().generateWorkoutPlan(
+            goal = "Six-Pack Abs",
+            experience = "Intermediate",
+            equipment = "Bodyweight",
+            durationMinutes = 15
+        )
+    )
+    val generatedWorkoutPlan: StateFlow<WorkoutPlanResult> = _generatedWorkoutPlan.asStateFlow()
+
+    private val _isGeneratingPlan = MutableStateFlow(false)
+    val isGeneratingPlan: StateFlow<Boolean> = _isGeneratingPlan.asStateFlow()
+
+    private val _recentSessions = MutableStateFlow<List<WorkoutSessionEntity>>(emptyList())
+    val recentSessions: StateFlow<List<WorkoutSessionEntity>> = _recentSessions.asStateFlow()
+
+    private val _smokeTestResult = MutableStateFlow<SmokeTestGateResult?>(null)
+    val smokeTestResult: StateFlow<SmokeTestGateResult?> = _smokeTestResult.asStateFlow()
+
+    private val _isRunningSmokeTest = MutableStateFlow(false)
+    val isRunningSmokeTest: StateFlow<Boolean> = _isRunningSmokeTest.asStateFlow()
 
     private val _moodSpeculation = MutableStateFlow(MoodSpeculator.speculate(vitalsAnalyzer.vitalsFlow.value))
     val moodSpeculation: StateFlow<MoodSpeculation> = _moodSpeculation.asStateFlow()
@@ -52,14 +101,27 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _userProfile = MutableStateFlow(UserProfile())
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
+    private val _poseFrame = MutableStateFlow<PoseAnalysisFrame?>(null)
+    val poseFrame: StateFlow<PoseAnalysisFrame?> = _poseFrame.asStateFlow()
+
+    private val _poseCoachEnabled = MutableStateFlow(false)
+    val poseCoachEnabled: StateFlow<Boolean> = _poseCoachEnabled.asStateFlow()
+
     @Volatile private var lastBiometricSyncAtMs = 0L
     @Volatile private var lastInsightRequestAtMs = 0L
     @Volatile private var lastVitalsPublishAtMs = 0L
+    @Volatile private var lastAnnouncedRep = 0
+    @Volatile private var lastAnnouncedRepExercise: String? = null
+    @Volatile private var lastSpokenCriticalCue: String? = null
+    @Volatile private var lastWorkoutPhase: WorkoutPhase? = null
+    @Volatile private var completionSessionSaved = false
 
     val dualStreamAnalyzer = DualStreamAnalyzer(
         presageAnalyzer = vitalsAnalyzer,
         enableLiveVideoFrames = false,
-        onVideoFrameForAi = { jpeg -> liveAssistant.sendVideoFrame(jpeg) }
+        onVideoFrameForAi = { jpeg -> liveAssistant.sendVideoFrame(jpeg) },
+        poseLandmarkManager = poseLandmarkManager,
+        onPoseFrame = { frame -> onPoseAnalysisFrame(frame) }
     )
 
     private val repository: WorkoutRepository by lazy {
@@ -199,12 +261,21 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             userPrefsRepo.userProfileFlow.collect { profile ->
                 _userProfile.value = profile
                 vitalsAnalyzer.updateUserProfile(profile)
+                workoutManager.updateRestingHeartRate(profile.restingHeartRate)
                 presageManager.setTelemetryEnabled(profile.smartSpectraTelemetryEnabled)
+                coachAgent.setAuthMode(
+                    if (profile.preferLocalEdgeAi) AdkAuthMode.ON_DEVICE_EDGE
+                    else AdkAuthMode.FIREBASE_AI_LOGIC
+                )
             }
         }
 
         viewModelScope.launch {
             vitalsFlow.collect { vitals ->
+                val workoutPhase = workoutManager.state.value.phase
+                if (workoutPhase != WorkoutPhase.IDLE && workoutPhase != WorkoutPhase.COMPLETED) {
+                    workoutManager.onVitalsReading(vitals)
+                }
                 val restingHr = userProfile.value.restingHeartRate
                 val shift = trendTracker.record(vitals)
                 val trendNote = trendTracker.computeTrendNote(vitals)
@@ -235,6 +306,274 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             assistantState.collect { state ->
                 dualStreamAnalyzer.enableLiveVideoFrames =
                     state.connectionState == LiveConnectionState.LISTENING
+            }
+        }
+
+        viewModelScope.launch {
+            workoutManager.state.collect { workout ->
+                handleWorkoutState(workout)
+            }
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.allSessions.collect { sessions ->
+                    _recentSessions.value = sessions.take(5)
+                }
+            }
+        }
+    }
+
+    /**
+     * Invoked on the pose-analysis worker thread for each throttled MediaPipe frame.
+     * Feeds the shared rep counter / form-deviation engine and the live HUD.
+     */
+    private fun onPoseAnalysisFrame(frame: PoseAnalysisFrame) {
+        // A frame already in flight when the coach is disabled must not resurrect
+        // the skeleton overlay or fire voice cues.
+        if (!_poseCoachEnabled.value) return
+
+        _poseFrame.value = frame
+        workoutManager.onPoseFrame(frame)
+
+        val workout = workoutManager.state.value
+        if (workout.phase != WorkoutPhase.ACTIVE_SET) return
+        if (!frame.currentExercise.equals(workout.exerciseName, ignoreCase = true)) return
+
+        val exercise = frame.currentExercise
+        if (exercise != lastAnnouncedRepExercise) {
+            lastAnnouncedRepExercise = exercise
+            lastAnnouncedRep = 0
+        }
+        if (frame.currentRepCount > lastAnnouncedRep) {
+            lastAnnouncedRep = frame.currentRepCount
+            audioCoach.speakRepCount(frame.currentRepCount)
+        }
+
+        // Speak each distinct critical fault once per occurrence instead of
+        // re-queuing the same sentence at 10 fps.
+        val criticalCue = frame.activeDeviations
+            .firstOrNull { it.severity == DeviationSeverity.CRITICAL }
+            ?.message
+        if (criticalCue == null) {
+            lastSpokenCriticalCue = null
+        } else if (criticalCue != lastSpokenCriticalCue) {
+            lastSpokenCriticalCue = criticalCue
+            audioCoach.speakCorrection(criticalCue)
+        }
+    }
+
+    private fun handleWorkoutState(workout: WorkoutState) {
+        val previous = lastWorkoutPhase
+        if (workout.phase != previous) {
+            when (workout.phase) {
+                WorkoutPhase.REST_INTERVAL ->
+                    audioCoach.announcePhase(
+                        "Rest ${workout.restSecondsRemaining.coerceAtLeast(1)} seconds. Recover."
+                    )
+                WorkoutPhase.COOLDOWN ->
+                    audioCoach.announcePhase("Cooldown. Follow the breathing pacer.")
+                WorkoutPhase.COMPLETED -> {
+                    audioCoach.announcePhase("Workout complete. Great work.")
+                    persistCompletedSession()
+                }
+                WorkoutPhase.ACTIVE_SET -> {
+                    lastAnnouncedRep = 0
+                    lastSpokenCriticalCue = null
+                    if (previous == WorkoutPhase.WARMUP ||
+                        previous == WorkoutPhase.REST_INTERVAL ||
+                        previous == null
+                    ) {
+                        audioCoach.announcePhase("Set ${workout.currentSet}. ${workout.exerciseName}.")
+                    }
+                }
+                else -> Unit
+            }
+            lastWorkoutPhase = workout.phase
+        }
+    }
+
+    private fun persistCompletedSession() {
+        if (completionSessionSaved) return
+        completionSessionSaved = true
+        viewModelScope.launch(Dispatchers.Default) {
+            runCatching {
+                val entity = workoutManager.finishWorkout()
+                repository.saveSession(entity)
+            }.onFailure { e ->
+                Log.w(TAG, "Failed to persist workout session: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Toggles the MediaPipe pose coach lane (skeleton overlay, rep counting,
+     * form-deviation alerts, and TTS cues). Requires camera consent + permission.
+     */
+    fun setPoseCoachEnabled(enabled: Boolean) {
+        _poseCoachEnabled.value = enabled
+        dualStreamAnalyzer.poseAnalysisEnabled = enabled
+        if (enabled) {
+            viewModelScope.launch(Dispatchers.Default) { poseLandmarkManager.warmUp() }
+        } else {
+            _poseFrame.value = null
+            lastSpokenCriticalCue = null
+            lastAnnouncedRep = 0
+            lastAnnouncedRepExercise = null
+            val phase = workoutManager.state.value.phase
+            if (phase != WorkoutPhase.IDLE && phase != WorkoutPhase.COMPLETED) {
+                stopWorkout()
+            }
+        }
+    }
+
+    /**
+     * Selects a coached exercise (e.g. "Bodyweight Squats", "Push-ups", "Lunges", "Plank")
+     * and starts a fresh workout session with the shared pose engine.
+     */
+    fun selectExercise(exercise: String) {
+        val normalized = exercise.trim()
+        if (normalized.isEmpty()) return
+        if (!_poseCoachEnabled.value) {
+            setPoseCoachEnabled(true)
+        }
+        val isometric = PoseLandmarkManager.isIsometricExercise(normalized)
+        completionSessionSaved = false
+        lastWorkoutPhase = null
+        lastAnnouncedRep = 0
+        lastAnnouncedRepExercise = normalized
+        lastSpokenCriticalCue = null
+        workoutManager.startWorkout(
+            exercise = normalized,
+            targetReps = if (isometric) 30 else 10,
+            totalSets = 3,
+            baseRestSeconds = 45,
+            includeWarmup = false,
+            includeCooldown = true
+        )
+    }
+
+    /**
+     * Generates a personalized AI workout routine via [FitnessCoachAgent] (with 100% offline
+     * edge fallback) and announces the coach plan.
+     */
+    fun generateAiWorkoutPlan(
+        goal: String,
+        experience: String,
+        equipment: String,
+        durationMinutes: Int
+    ) {
+        if (_isGeneratingPlan.value) return
+        _isGeneratingPlan.value = true
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val plan = coachAgent.requestWorkoutPlan(
+                    goal = goal,
+                    experience = experience,
+                    equipment = equipment,
+                    durationMinutes = durationMinutes
+                )
+                _generatedWorkoutPlan.value = plan
+                audioCoach.announcePhase(
+                    "AI Coach ready: ${plan.goal} workout with ${plan.targetExercises.size} exercises."
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "AI workout generation fallback: ${e.message}")
+            } finally {
+                _isGeneratingPlan.value = false
+            }
+        }
+    }
+
+    /**
+     * Starts the full multi-exercise AI routine with optional warmup and cooldown.
+     */
+    fun startGeneratedRoutine(
+        plan: WorkoutPlanResult = _generatedWorkoutPlan.value,
+        includeWarmup: Boolean = true,
+        includeCooldown: Boolean = true
+    ) {
+        if (!_poseCoachEnabled.value) {
+            setPoseCoachEnabled(true)
+        }
+        val firstEx = plan.targetExercises.firstOrNull() ?: "Bodyweight Squats"
+        val isometric = PoseLandmarkManager.isIsometricExercise(firstEx)
+        completionSessionSaved = false
+        lastWorkoutPhase = null
+        lastAnnouncedRep = 0
+        lastAnnouncedRepExercise = firstEx
+        lastSpokenCriticalCue = null
+        workoutManager.startRoutine(
+            exercises = plan.targetExercises,
+            targetReps = if (isometric) 30 else 12,
+            setsPerExercise = 3,
+            baseRestSeconds = plan.recommendedRestIntervalSeconds,
+            includeWarmup = includeWarmup,
+            includeCooldown = includeCooldown
+        )
+    }
+
+    fun incrementManualRep() {
+        val beforeReps = workoutManager.state.value.completedReps
+        workoutManager.incrementRep()
+        val after = workoutManager.state.value
+        if (after.phase == WorkoutPhase.ACTIVE_SET && after.completedReps > beforeReps && !after.isIsometricHold) {
+            lastAnnouncedRep = after.completedReps
+            audioCoach.speakRepCount(after.completedReps)
+        }
+    }
+
+    fun completeCurrentSet() {
+        workoutManager.completeSet()
+    }
+
+    fun skipCurrentPhase() {
+        when (workoutManager.state.value.phase) {
+            WorkoutPhase.WARMUP -> workoutManager.skipWarmup()
+            WorkoutPhase.REST_INTERVAL -> workoutManager.skipRest()
+            WorkoutPhase.COOLDOWN -> stopWorkout()
+            else -> Unit
+        }
+    }
+
+    fun simulateVitalsExertion(exertionFactor: Float) {
+        vitalsAnalyzer.simulateExerciseExertion(exertionFactor)
+    }
+
+    fun stopWorkout() {
+        val phase = workoutManager.state.value.phase
+        if (phase == WorkoutPhase.IDLE || phase == WorkoutPhase.COMPLETED) return
+        completionSessionSaved = false
+        // Suppress the automatic completion announcement/persist path, then save
+        // the partial session exactly once from here.
+        lastWorkoutPhase = WorkoutPhase.COMPLETED
+        lastAnnouncedRep = 0
+        lastAnnouncedRepExercise = null
+        lastSpokenCriticalCue = null
+        viewModelScope.launch(Dispatchers.Default) {
+            runCatching {
+                val entity = workoutManager.finishWorkout()
+                repository.saveSession(entity)
+            }.onFailure { e ->
+                Log.w(TAG, "Failed to persist stopped workout: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Runs the Day 1 Hard Gate smoke test (Presage custom-input pipeline +
+     * MediaPipe landmark emission) without requiring a physical camera.
+     */
+    fun runHardGateSmokeTest() {
+        if (_isRunningSmokeTest.value) return
+        _isRunningSmokeTest.value = true
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                _smokeTestResult.value = headlessVideoFeeder.runSmokeTest()
+            } catch (e: Exception) {
+                Log.w(TAG, "Hard gate smoke test failed: ${e.message}")
+            } finally {
+                _isRunningSmokeTest.value = false
             }
         }
     }
@@ -366,6 +705,9 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         vitalsAnalyzer.resetCustomInput()
         dualStreamAnalyzer.shutdown()
         liveAssistant.shutdown()
+        workoutManager.cleanup()
+        poseLandmarkManager.close()
+        audioCoach.shutdown()
     }
 }
 

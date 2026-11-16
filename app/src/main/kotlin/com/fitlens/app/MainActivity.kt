@@ -202,6 +202,14 @@ class MainActivity : ComponentActivity() {
         val profile by viewModel.userProfile.collectAsState()
         val assistantState by viewModel.assistantState.collectAsState()
         val moodSpeculation by viewModel.moodSpeculation.collectAsState()
+        val poseFrame by viewModel.poseFrame.collectAsState()
+        val workoutState by viewModel.workoutState.collectAsState()
+        val poseCoachEnabled by viewModel.poseCoachEnabled.collectAsState()
+        val generatedPlan by viewModel.generatedWorkoutPlan.collectAsState()
+        val isGeneratingPlan by viewModel.isGeneratingPlan.collectAsState()
+        val recentSessions by viewModel.recentSessions.collectAsState()
+        val smokeTestResult by viewModel.smokeTestResult.collectAsState()
+        val isRunningSmokeTest by viewModel.isRunningSmokeTest.collectAsState()
         val hasCameraPerm by hasCameraPermissionState
 
         var useFrontCamera by remember { mutableStateOf(true) }
@@ -242,7 +250,10 @@ class MainActivity : ComponentActivity() {
         if (showProfileSheet) {
             ProfileAndPrivacySheet(
                 profile = profile,
+                smokeTestResult = smokeTestResult,
+                isRunningSmokeTest = isRunningSmokeTest,
                 onSaveProfile = { updated -> viewModel.updateUserProfile(updated) },
+                onRunSmokeTest = { viewModel.runHardGateSmokeTest() },
                 onDeleteAllData = { viewModel.deleteAllLocalData() },
                 onDismiss = { showProfileSheet = false }
             )
@@ -260,6 +271,23 @@ class MainActivity : ComponentActivity() {
             hasCameraPermission = hasCameraPerm,
             useFrontCamera = useFrontCamera,
             dualStreamAnalyzer = viewModel.dualStreamAnalyzer,
+            poseFrame = poseFrame,
+            workoutState = workoutState,
+            poseCoachEnabled = poseCoachEnabled,
+            generatedPlan = generatedPlan,
+            isGeneratingPlan = isGeneratingPlan,
+            recentSessions = recentSessions,
+            onTogglePoseCoach = { viewModel.setPoseCoachEnabled(!poseCoachEnabled) },
+            onSelectExercise = { exercise -> viewModel.selectExercise(exercise) },
+            onGenerateWorkoutPlan = { goal, exp, equip, duration ->
+                viewModel.generateAiWorkoutPlan(goal, exp, equip, duration)
+            },
+            onStartGeneratedRoutine = { plan -> viewModel.startGeneratedRoutine(plan) },
+            onIncrementRep = { viewModel.incrementManualRep() },
+            onCompleteSet = { viewModel.completeCurrentSet() },
+            onSkipPhase = { viewModel.skipCurrentPhase() },
+            onSimulateExertion = { factor -> viewModel.simulateVitalsExertion(factor) },
+            onStopWorkout = { viewModel.stopWorkout() },
             onToggleCameraFacing = {
                 useFrontCamera = !useFrontCamera
                 viewModel.dualStreamAnalyzer.isFrontCamera = useFrontCamera

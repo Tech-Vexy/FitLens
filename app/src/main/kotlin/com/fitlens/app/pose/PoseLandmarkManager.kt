@@ -152,6 +152,15 @@ class PoseLandmarkManager(
     // MediaPipe PoseLandmarker instance (lazy-initialized on first frame)
     @Volatile private var mpLandmarker: PoseLandmarker? = null
 
+    // Guards lazy model creation so warmUp() and the camera thread cannot both
+    // build a landmarker (which would leak one instance).
+    private val engineLock = Any()
+
+    // Guards the reusable bitmap scratch buffers. Deliberately separate from the
+    // analysis monitor: YUV conversion runs on the camera thread and must not
+    // wait behind MediaPipe inference running on the pose worker thread.
+    private val extractionLock = Any()
+
     // Reused scratch buffers across frames to avoid GC churn on the camera thread
     private var scratchY: ByteArray? = null
     private var scratchU: ByteArray? = null
@@ -162,7 +171,15 @@ class PoseLandmarkManager(
     private var scratchBitmapH = 0
 
     private fun ensureLandmarker(): PoseLandmarker? {
-        return mpLandmarker ?: runCatching {
+        mpLandmarker?.let { return it }
+        synchronized(engineLock) {
+            mpLandmarker?.let { return it }
+            return createLandmarker()
+        }
+    }
+
+    private fun createLandmarker(): PoseLandmarker? {
+        return runCatching {
             context?.let { ctx ->
                 val options = PoseLandmarker.PoseLandmarkerOptions.builder()
                     .setBaseOptions(
@@ -185,6 +202,14 @@ class PoseLandmarkManager(
     }
 
     /**
+     * Pre-loads the MediaPipe PoseLandmarker model off the camera thread so the
+     * first analyzed frame doesn't stall frame delivery.
+     */
+    fun warmUp() {
+        ensureLandmarker()
+    }
+
+    /**
      * Extracts a downscaled, upright, optionally mirrored ARGB_8888 Bitmap copy from [imageProxy]
      * without mutating its ByteBuffer positions/limits. Returns null if the format is unsupported
      * or the landmarker is not yet initialized.
@@ -192,7 +217,6 @@ class PoseLandmarkManager(
      * Designed to run quickly on the camera thread so [analyzeBitmap] can run asynchronously
      * on a dedicated worker without stalling SmartSpectra frame delivery.
      */
-    @Synchronized
     fun extractUprightBitmap(
         imageProxy: ImageProxy,
         isFrontCamera: Boolean = true
@@ -202,15 +226,17 @@ class PoseLandmarkManager(
             Log.w(TAG, "Unsupported image format: ${imageProxy.format}")
             return null
         }
-        return runCatching {
-            val bitmap = imageProxy.toUprightColorBitmap(
-                rotationDegrees = imageProxy.imageInfo.rotationDegrees,
-                mirrorHorizontally = isFrontCamera
-            )
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        }.getOrElse { e ->
-            Log.w(TAG, "Bitmap extraction failed: ${e.message}")
-            null
+        synchronized(extractionLock) {
+            return runCatching {
+                val bitmap = imageProxy.toUprightColorBitmap(
+                    rotationDegrees = imageProxy.imageInfo.rotationDegrees,
+                    mirrorHorizontally = isFrontCamera
+                )
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            }.getOrElse { e ->
+                Log.w(TAG, "Bitmap extraction failed: ${e.message}")
+                null
+            }
         }
     }
 
@@ -491,6 +517,13 @@ class PoseLandmarkManager(
             normalizedExercise.contains("plank") || normalizedExercise.contains("climber") -> {
                 primaryAngle = analyzePlank(landmarks, deviations)
             }
+            normalizedExercise.contains("crunch") ||
+                normalizedExercise.contains("leg raise") ||
+                normalizedExercise.contains("twist") ||
+                normalizedExercise.contains("abs") ||
+                normalizedExercise.contains("bridge") -> {
+                primaryAngle = analyzeCoreAndAbs(landmarks, deviations)
+            }
             else -> {
                 val hip = landmarks[LEFT_HIP] ?: landmarks[RIGHT_HIP]
                 val knee = landmarks[LEFT_KNEE] ?: landmarks[RIGHT_KNEE]
@@ -700,6 +733,38 @@ class PoseLandmarkManager(
         }
 
         return bodyAngle
+    }
+
+    private fun analyzeCoreAndAbs(
+        landmarks: Map<Int, LandmarkPoint>,
+        deviations: MutableList<FormDeviation>
+    ): Double {
+        val shoulder = landmarks[LEFT_SHOULDER] ?: landmarks[RIGHT_SHOULDER]
+        val hip = landmarks[LEFT_HIP] ?: landmarks[RIGHT_HIP]
+        val knee = landmarks[LEFT_KNEE] ?: landmarks[RIGHT_KNEE]
+
+        if (shoulder == null || hip == null || knee == null) {
+            return 180.0
+        }
+
+        val hipFlexionAngle = calculateAngle(shoulder, hip, knee)
+        if (hipFlexionAngle > 168.0) {
+            deviations.add(
+                FormDeviation(
+                    jointName = "Lower Back",
+                    message = "Keep lower back pressed down and ribs tucked to protect lumbar spine.",
+                    severity = DeviationSeverity.INFO
+                )
+            )
+        }
+
+        updateRepStateMachine(
+            angle = hipFlexionAngle,
+            inflectionThreshold = 100.0,
+            completionThreshold = 145.0
+        )
+
+        return hipFlexionAngle
     }
 
     private fun updateRepStateMachine(

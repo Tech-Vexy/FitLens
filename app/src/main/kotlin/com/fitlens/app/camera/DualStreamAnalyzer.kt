@@ -5,6 +5,8 @@ import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.fitlens.app.pose.PoseAnalysisFrame
+import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
@@ -14,6 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * DualStreamAnalyzer dispatches CameraX ImageProxy frames concurrently to:
  * 1. Presage SmartSpectra SDK ([PresageFrameAnalyzer]) at full camera FPS.
  * 2. Gemini Live API ([onVideoFrameForAi]) as throttled, low-res upright JPEG frames when live.
+ * 3. MediaPipe PoseLandmarker ([poseLandmarkManager]) as throttled upright bitmap frames
+ *    when [poseAnalysisEnabled] is set (biomechanics coach / rep counting).
  *
  * [PresageFrameAnalyzer.analyze] closes [imageProxy] in its finally block.
  */
@@ -21,23 +25,68 @@ class DualStreamAnalyzer(
     private val presageAnalyzer: PresageFrameAnalyzer,
     @Volatile var enableLiveVideoFrames: Boolean = false,
     @Volatile var isFrontCamera: Boolean = true,
-    private val onVideoFrameForAi: ((ByteArray) -> Unit)? = null
+    private val onVideoFrameForAi: ((ByteArray) -> Unit)? = null,
+    private val poseLandmarkManager: PoseLandmarkManager? = null,
+    private val onPoseFrame: ((PoseAnalysisFrame) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
 
     companion object {
         private const val TAG = "DualStreamAnalyzer"
         private const val AI_FRAME_INTERVAL_MS = 2000L
         private const val AI_FRAME_MAX_DIM = 320
+        private const val POSE_FRAME_INTERVAL_MS = 100L
     }
 
+    @Volatile var poseAnalysisEnabled: Boolean = false
+
     private val aiFrameExecutor = Executors.newSingleThreadExecutor()
+    private val poseFrameExecutor = Executors.newSingleThreadExecutor()
     private val isAiFrameBusy = AtomicBoolean(false)
+    private val isPoseFrameBusy = AtomicBoolean(false)
     @Volatile private var lastAiFrameAtMs = 0L
+    @Volatile private var lastPoseFrameAtMs = 0L
 
     override fun analyze(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
+
+        val poseManager = poseLandmarkManager
+        val poseCallback = onPoseFrame
+        if (poseAnalysisEnabled &&
+            poseManager != null &&
+            poseCallback != null &&
+            now - lastPoseFrameAtMs >= POSE_FRAME_INTERVAL_MS &&
+            isPoseFrameBusy.compareAndSet(false, true)
+        ) {
+            lastPoseFrameAtMs = now
+            val poseBitmap = runCatching {
+                poseManager.extractUprightBitmap(imageProxy, isFrontCamera)
+            }.getOrNull()
+
+            if (poseBitmap != null) {
+                runCatching {
+                    poseFrameExecutor.execute {
+                        try {
+                            val frame = poseManager.analyzeBitmap(poseBitmap)
+                            poseCallback.invoke(frame)
+                        } catch (e: Exception) {
+                            Log.v(TAG, "Pose analysis skipped: ${e.message}")
+                        } finally {
+                            poseBitmap.recycle()
+                            isPoseFrameBusy.set(false)
+                        }
+                    }
+                }.onFailure {
+                    poseBitmap.recycle()
+                    isPoseFrameBusy.set(false)
+                }
+            } else {
+                isPoseFrameBusy.set(false)
+            }
+        }
+
+        val aiCallback = onVideoFrameForAi
         if (enableLiveVideoFrames &&
-            onVideoFrameForAi != null &&
+            aiCallback != null &&
             now - lastAiFrameAtMs >= AI_FRAME_INTERVAL_MS &&
             isAiFrameBusy.compareAndSet(false, true)
         ) {
@@ -52,7 +101,7 @@ class DualStreamAnalyzer(
                         try {
                             val jpegBytes = compressForLiveAi(aiBitmap)
                             if (jpegBytes.isNotEmpty()) {
-                                onVideoFrameForAi.invoke(jpegBytes)
+                                aiCallback.invoke(jpegBytes)
                             }
                         } catch (e: Exception) {
                             Log.v(TAG, "AI frame compression skipped: ${e.message}")
@@ -119,5 +168,6 @@ class DualStreamAnalyzer(
 
     fun shutdown() {
         runCatching { aiFrameExecutor.shutdown() }
+        runCatching { poseFrameExecutor.shutdown() }
     }
 }

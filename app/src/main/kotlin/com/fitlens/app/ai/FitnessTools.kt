@@ -73,20 +73,32 @@ class FitnessTools {
         @Param(description = "Preferred workout duration in minutes") durationMinutes: Int
     ): WorkoutPlanResult {
         val exercises = when {
-            goal.contains("hypertrophy", ignoreCase = true) -> listOf("Barbell Squat", "Romanian Deadlift", "Overhead Press")
-            goal.contains("endurance", ignoreCase = true) -> listOf("Jumping Jacks", "High Knees", "Burpees", "Mountain Climbers")
+            goal.contains("hypertrophy", ignoreCase = true) ->
+                listOf("Barbell Squat", "Romanian Deadlift", "Overhead Press")
+            goal.contains("endurance", ignoreCase = true) || goal.contains("hiit", ignoreCase = true) || goal.contains("cardio", ignoreCase = true) ->
+                listOf("Jumping Jacks", "High Knees", "Burpees", "Mountain Climbers")
+            goal.contains("abs", ignoreCase = true) || goal.contains("six pack", ignoreCase = true) || goal.contains("six-pack", ignoreCase = true) || goal.contains("core", ignoreCase = true) ->
+                listOf("Plank", "Bicycle Crunches", "Leg Raises", "Mountain Climbers", "Russian Twists")
+            goal.contains("chest", ignoreCase = true) || goal.contains("arm", ignoreCase = true) || goal.contains("upper", ignoreCase = true) ->
+                listOf("Push-Ups", "Diamond Push-Ups", "Wide Push-Ups", "Plank")
+            goal.contains("leg", ignoreCase = true) || goal.contains("glute", ignoreCase = true) || goal.contains("lower", ignoreCase = true) ->
+                listOf("Bodyweight Squats", "Lunges", "Sumo Squats", "Glute Bridges")
             goal.contains("strength", ignoreCase = true) && equipment.contains("bodyweight", ignoreCase = true) ->
                 listOf("Bodyweight Squats", "Push-Ups", "Lunges", "Plank")
             else -> listOf("Bodyweight Squats", "Push-ups", "Plank", "Lunges")
         }
 
-        val restSec = if (experience.equals("advanced", ignoreCase = true)) 45 else 75
+        val restSec = when {
+            experience.equals("advanced", ignoreCase = true) -> 45
+            experience.equals("intermediate", ignoreCase = true) -> 60
+            else -> 75
+        }
         return WorkoutPlanResult(
             goal = goal,
             targetExercises = exercises,
             targetDurationMinutes = durationMinutes,
             recommendedRestIntervalSeconds = restSec,
-            aiCoachRationale = "Structured $durationMinutes-min $goal circuit ($equipment) with ${restSec}s SmartSpectra vitals-guided recovery windows."
+            aiCoachRationale = "AI Trainer $durationMinutes-min $goal routine ($equipment, $experience) with ${restSec}s SmartSpectra wearable-free heart-rate & breathing recovery windows."
         )
     }
 

@@ -84,6 +84,10 @@ class GeminiLiveAssistant(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // Kept outside [scope] so the final suspend close() still runs after shutdown
+    // cancels the session scope.
+    private val teardownScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val _state = MutableStateFlow(LiveAssistantState())
     val state: StateFlow<LiveAssistantState> = _state.asStateFlow()
 
@@ -439,7 +443,7 @@ class GeminiLiveAssistant(
         val session = liveSession
         liveSession = null
         runCatching { session?.stopAudioConversation() }
-        runCatching { session?.close() }
+        teardownScope.launch { runCatching { session?.close() } }
         flushStreamedTranscripts()
         scope.cancel()
     }

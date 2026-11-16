@@ -220,11 +220,29 @@ class WorkoutManager(
     }
 
     @Synchronized
+    fun incrementRep() {
+        val current = _state.value
+        if (current.phase != WorkoutPhase.ACTIVE_SET) return
+        if (current.isIsometricHold) {
+            advanceIsometricHold(5)
+            return
+        }
+        val updated = current.completedReps + 1
+        _state.value = current.copy(
+            completedReps = updated,
+            activeCoachAlert = "Rep $updated/${current.targetReps} logged — keep steady breathing and form!"
+        )
+        if (updated >= current.targetReps) {
+            completeSet()
+        }
+    }
+
+    @Synchronized
     fun onPoseFrame(frame: PoseAnalysisFrame) {
         if (_state.value.phase != WorkoutPhase.ACTIVE_SET) return
 
         val isIsometric = _state.value.isIsometricHold
-        val newReps = if (isIsometric) _state.value.completedReps else frame.currentRepCount
+        val newReps = if (isIsometric) _state.value.completedReps else maxOf(_state.value.completedReps, frame.currentRepCount)
         val criticalDeviations = frame.activeDeviations.filter {
             it.severity == DeviationSeverity.CRITICAL
         }
@@ -289,6 +307,10 @@ class WorkoutManager(
         if (vitals.heartRateBpm > 30.0) {
             synchronized(hrSamples) {
                 hrSamples.add(vitals.heartRateBpm)
+                // Bound memory for very long sessions (~10 min at 1 Hz)
+                if (hrSamples.size > 600) {
+                    hrSamples.subList(0, hrSamples.size - 600).clear()
+                }
             }
         }
         val current = _state.value
