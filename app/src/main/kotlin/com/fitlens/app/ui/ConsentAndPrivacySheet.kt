@@ -67,19 +67,19 @@ fun SensingConsentDialog(
             ) {
                 ConsentBullet(
                     title = "Live On-Device Camera Signals",
-                    body = "FitLens uses your camera only while active on screen to compute pulse, breathing rate, HRV, and facial expressions via the Presage SmartSpectra SDK, plus 33 skeletal pose landmarks via MediaPipe. Raw video frames stay in volatile memory and are never recorded or uploaded."
+                    body = "FitLens AI uses your camera only while active on screen to compute pulse, breathing rate, HRV, and facial expressions via the Presage SmartSpectra SDK. Raw video frames stay in volatile memory unless you start a Gemini Live voice/video session."
                 )
                 ConsentBullet(
                     title = "100% Local Vault, Export & Deletion",
-                    body = "Workout summaries, vitals logs, and form faults are saved strictly on your device in local SQLite (fitlens_health_sqlite.db). Nothing syncs to the cloud. You can export to JSON or permanently delete all local data anytime in Profile & Privacy."
+                    body = "Local records are saved strictly on your device in local SQLite (fitlens_health_sqlite.db). You can permanently delete all local data anytime in Profile & Privacy."
                 )
                 ConsentBullet(
                     title = "Presage SDK Gating & Telemetry",
                     body = "SmartSpectra connects to Presage to authenticate the API key and optionally reports aggregate per-session stability diagnostics (containing zero video frames, zero vital values, and zero user/device IDs). You can opt out below."
                 )
                 ConsentBullet(
-                    title = "Optional AI Plan Generation",
-                    body = "Biometric vitals are always processed locally. Workout plan generation can use Firebase AI Logic (sending only goal, equipment, and duration) or run 100% offline via the On-Device Edge Engine."
+                    title = "Gemini Live Personal AI Trainer",
+                    body = "When you tap Talk Live or send a message, your personal AI trainer uses Firebase AI Logic (Gemini Live API) with your microphone and current mood/vitals context to converse with you, or falls back to local on-device responses if offline mode is enabled."
                 )
 
                 Surface(
@@ -127,7 +127,7 @@ fun SensingConsentDialog(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    "Disable Firebase Cloud AI even for workout plans",
+                                    "Disable Firebase Cloud AI (use local assistant responses)",
                                     color = Color.Gray,
                                     fontSize = 10.sp
                                 )
@@ -146,7 +146,7 @@ fun SensingConsentDialog(
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text(
-                        text = "Wellness & Fitness Only: FitLens is not a medical device and does not diagnose, treat, prevent disease, or support medical decision-making.",
+                        text = "Personal AI Trainer & Wellness Only: FitLens AI is not a medical device and does not diagnose, treat, prevent disease, or support medical decision-making.",
                         color = Color(0xFFFDE68A),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(10.dp)

@@ -1,71 +1,72 @@
 package com.fitlens.app.camera
 
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import com.fitlens.app.pose.PoseAnalysisFrame
-import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.vitals.PresageFrameAnalyzer
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * DualStreamAnalyzer dispatches single CameraX ImageProxy frames concurrently to:
- * 1. MediaPipe Pose Landmarker (biomechanical skeletal tracking, offloaded to a dedicated executor)
- * 2. Presage SmartSpectra SDK (useCustomInput rPPG vitals extraction at full camera FPS)
- *
- * Non-blocking contract: MediaPipe inference never stalls [PresageFrameAnalyzer.analyze].
- * If MediaPipe is still processing a previous frame, intermediate pose frames are skipped
- * while SmartSpectra still receives every camera frame at >=25-30 fps.
+ * DualStreamAnalyzer dispatches CameraX ImageProxy frames concurrently to:
+ * 1. Presage SmartSpectra SDK ([PresageFrameAnalyzer]) at full camera FPS.
+ * 2. Gemini Live API ([onVideoFrameForAi]) as throttled, low-res upright JPEG frames when live.
  *
  * [PresageFrameAnalyzer.analyze] closes [imageProxy] in its finally block.
  */
 class DualStreamAnalyzer(
     private val presageAnalyzer: PresageFrameAnalyzer,
-    private val poseManager: PoseLandmarkManager,
-    @Volatile var enablePoseAnalysis: Boolean = true,
+    @Volatile var enableLiveVideoFrames: Boolean = false,
     @Volatile var isFrontCamera: Boolean = true,
-    private val onPoseFrame: ((PoseAnalysisFrame) -> Unit)? = null
+    private val onVideoFrameForAi: ((ByteArray) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
 
     companion object {
         private const val TAG = "DualStreamAnalyzer"
+        private const val AI_FRAME_INTERVAL_MS = 2000L
+        private const val AI_FRAME_MAX_DIM = 320
     }
 
-    private val poseExecutor = Executors.newSingleThreadExecutor()
-    private val isPoseBusy = AtomicBoolean(false)
+    private val aiFrameExecutor = Executors.newSingleThreadExecutor()
+    private val isAiFrameBusy = AtomicBoolean(false)
+    @Volatile private var lastAiFrameAtMs = 0L
 
     override fun analyze(imageProxy: ImageProxy) {
-        if (enablePoseAnalysis && isPoseBusy.compareAndSet(false, true)) {
-            val bitmap = try {
-                poseManager.extractUprightBitmap(
-                    imageProxy = imageProxy,
-                    isFrontCamera = isFrontCamera
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "MediaPipe bitmap extraction failed: ${e.message}")
-                null
-            }
+        val now = System.currentTimeMillis()
+        if (enableLiveVideoFrames &&
+            onVideoFrameForAi != null &&
+            now - lastAiFrameAtMs >= AI_FRAME_INTERVAL_MS &&
+            isAiFrameBusy.compareAndSet(false, true)
+        ) {
+            lastAiFrameAtMs = now
+            val aiBitmap = runCatching {
+                extractUprightBitmap(imageProxy, isFrontCamera)
+            }.getOrNull()
 
-            if (bitmap != null) {
-                try {
-                    poseExecutor.execute {
+            if (aiBitmap != null) {
+                runCatching {
+                    aiFrameExecutor.execute {
                         try {
-                            val analysisFrame = poseManager.analyzeBitmap(bitmap)
-                            onPoseFrame?.invoke(analysisFrame)
+                            val jpegBytes = compressForLiveAi(aiBitmap)
+                            if (jpegBytes.isNotEmpty()) {
+                                onVideoFrameForAi.invoke(jpegBytes)
+                            }
                         } catch (e: Exception) {
-                            Log.w(TAG, "MediaPipe frame analysis failed: ${e.message}")
+                            Log.v(TAG, "AI frame compression skipped: ${e.message}")
                         } finally {
-                            bitmap.recycle()
-                            isPoseBusy.set(false)
+                            aiBitmap.recycle()
+                            isAiFrameBusy.set(false)
                         }
                     }
-                } catch (e: Exception) {
-                    bitmap.recycle()
-                    isPoseBusy.set(false)
+                }.onFailure {
+                    aiBitmap.recycle()
+                    isAiFrameBusy.set(false)
                 }
             } else {
-                isPoseBusy.set(false)
+                isAiFrameBusy.set(false)
             }
         }
 
@@ -77,7 +78,46 @@ class DualStreamAnalyzer(
         }
     }
 
+    private fun extractUprightBitmap(imageProxy: ImageProxy, mirrorHorizontally: Boolean): Bitmap {
+        val raw = imageProxy.toBitmap()
+        val rotation = imageProxy.imageInfo.rotationDegrees.toFloat()
+        if (rotation == 0f && !mirrorHorizontally) return raw
+
+        val matrix = Matrix().apply {
+            if (rotation != 0f) postRotate(rotation)
+            if (mirrorHorizontally) postScale(-1f, 1f)
+        }
+        return try {
+            Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        } finally {
+            raw.recycle()
+        }
+    }
+
+    private fun compressForLiveAi(source: Bitmap): ByteArray {
+        val maxDim = maxOf(source.width, source.height).coerceAtLeast(1)
+        val scale = if (maxDim > AI_FRAME_MAX_DIM) AI_FRAME_MAX_DIM.toFloat() / maxDim else 1f
+        val scaled = if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                source,
+                (source.width * scale).toInt().coerceAtLeast(1),
+                (source.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+        } else {
+            source
+        }
+        return try {
+            ByteArrayOutputStream().use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 60, out)
+                out.toByteArray()
+            }
+        } finally {
+            if (scaled !== source) scaled.recycle()
+        }
+    }
+
     fun shutdown() {
-        runCatching { poseExecutor.shutdown() }
+        runCatching { aiFrameExecutor.shutdown() }
     }
 }
