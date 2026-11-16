@@ -496,6 +496,9 @@ fun PersonalTrainerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 QuickPromptChip("How am I feeling?") { onMoodCheckIn() }
+                QuickPromptChip("Guide reps & rest") {
+                    onSendMessage("Let's do a quick set — count my reps, pace my breathing, and tell me when to rest based on my heart rate and expression.")
+                }
                 QuickPromptChip(
                     label = if (showBreathingGuide) "Hide Breathing" else "4-2-6 Breathing"
                 ) {
