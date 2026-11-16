@@ -1,5 +1,6 @@
 package com.fitlens.app.ai.live
 
+import android.annotation.SuppressLint
 import android.util.Log
 import com.fitlens.app.ai.firebase.FirebaseAiService
 import com.google.firebase.Firebase
@@ -112,6 +113,7 @@ class GeminiLiveAssistant(
     val isLiveVoiceActive: Boolean
         get() = _state.value.connectionState == LiveConnectionState.LISTENING
 
+    @SuppressLint("MissingPermission")
     fun startVoiceSession(initialBiometricContext: String) {
         val current = _state.value.connectionState
         if (current == LiveConnectionState.CONNECTING || current == LiveConnectionState.LISTENING) {

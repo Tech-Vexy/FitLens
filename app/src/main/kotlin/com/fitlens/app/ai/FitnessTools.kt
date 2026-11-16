@@ -88,11 +88,7 @@ class FitnessTools {
             else -> listOf("Bodyweight Squats", "Push-ups", "Plank", "Lunges")
         }
 
-        val restSec = when {
-            experience.equals("advanced", ignoreCase = true) -> 45
-            experience.equals("intermediate", ignoreCase = true) -> 60
-            else -> 75
-        }
+        val restSec = if (experience.equals("advanced", ignoreCase = true)) 45 else 75
         return WorkoutPlanResult(
             goal = goal,
             targetExercises = exercises,
