@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private val workoutViewModel: WorkoutViewModel by viewModels()
     private val hasCameraPermissionState = mutableStateOf(false)
     private var resumeSensingAfterPause = false
+    private var userManuallyStoppedSensing = false
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -113,24 +114,29 @@ class MainActivity : ComponentActivity() {
 
         val shouldResume = resumeSensingAfterPause
         resumeSensingAfterPause = false
-        if (shouldResume &&
+        if ((shouldResume || !userManuallyStoppedSensing) &&
             workoutViewModel.userProfile.value.hasAcceptedSensingConsent &&
             hasCameraPermissionState.value
         ) {
-            startMeasurement()
+            startMeasurement(clearPreviousReadings = false)
         }
     }
 
     override fun onPause() {
         super.onPause()
         resumeSensingAfterPause =
-            sdk.processingStatus.value == ProcessingStatus.RUNNING ||
+            workoutViewModel.isSensingActive.value ||
+                sdk.processingStatus.value == ProcessingStatus.RUNNING ||
                 sdk.processingStatus.value == ProcessingStatus.STARTING
-        stopMeasurement()
+        stopMeasurement(userInitiated = false)
         workoutViewModel.stopLiveVoiceAssistant()
     }
 
-    private fun stopMeasurement() {
+    private fun stopMeasurement(userInitiated: Boolean = true) {
+        if (userInitiated) {
+            userManuallyStoppedSensing = true
+        }
+        workoutViewModel.setSensingActive(false)
         lifecycleScope.launch {
             sdkLifecycleMutex.withLock {
                 when (sdk.processingStatus.value) {
@@ -139,27 +145,43 @@ class MainActivity : ComponentActivity() {
                     ProcessingStatus.STOPPING -> {
                         runCatching { sdk.stop() }
                         workoutViewModel.resetVitalsInput()
-                        workoutViewModel.clearVitalsSession()
+                        if (userInitiated) {
+                            workoutViewModel.clearVitalsSession()
+                        }
                     }
-                    else -> Unit
+                    ProcessingStatus.ERROR -> {
+                        runCatching { sdk.reset() }
+                        workoutViewModel.resetVitalsInput()
+                        if (userInitiated) {
+                            workoutViewModel.clearVitalsSession()
+                        }
+                    }
+                    else -> {
+                        if (userInitiated) {
+                            workoutViewModel.clearVitalsSession()
+                        }
+                    }
                 }
             }
         }
     }
 
     private fun ensurePermissionAndStartMeasurement() {
+        userManuallyStoppedSensing = false
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         } else {
             hasCameraPermissionState.value = true
-            startMeasurement()
+            startMeasurement(clearPreviousReadings = true)
         }
     }
 
-    private fun startMeasurement() {
+    private fun startMeasurement(clearPreviousReadings: Boolean = true) {
         if (!workoutViewModel.userProfile.value.hasAcceptedSensingConsent) return
+        userManuallyStoppedSensing = false
+        workoutViewModel.setSensingActive(true)
         lifecycleScope.launch {
             sdkLifecycleMutex.withLock {
                 if (!workoutViewModel.userProfile.value.hasAcceptedSensingConsent) return@withLock
@@ -170,7 +192,13 @@ class MainActivity : ComponentActivity() {
                     return@withLock
                 }
                 runCatching {
-                    workoutViewModel.clearVitalsSession()
+                    if (clearPreviousReadings) {
+                        workoutViewModel.clearVitalsSession()
+                    }
+                    if (sdk.processingStatus.value == ProcessingStatus.ERROR) {
+                        runCatching { sdk.reset() }
+                        workoutViewModel.resetVitalsInput()
+                    }
                     workoutViewModel.prepareVitalsCustomInput()
                     sdk.start()
                     Log.d(TAG, "SmartSpectra SDK started (custom input mode)")
@@ -210,6 +238,7 @@ class MainActivity : ComponentActivity() {
         val recentSessions by viewModel.recentSessions.collectAsState()
         val smokeTestResult by viewModel.smokeTestResult.collectAsState()
         val isRunningSmokeTest by viewModel.isRunningSmokeTest.collectAsState()
+        val isSensingActive by viewModel.isSensingActive.collectAsState()
         val hasCameraPerm by hasCameraPermissionState
 
         var useFrontCamera by remember { mutableStateOf(true) }
@@ -217,14 +246,38 @@ class MainActivity : ComponentActivity() {
         var pendingStartAfterConsent by remember { mutableStateOf(false) }
         var showProfileSheet by remember { mutableStateOf(false) }
 
-        LaunchedEffect(profile.hasAcceptedSensingConsent) {
+        LaunchedEffect(profile.hasAcceptedSensingConsent, hasCameraPerm) {
             if (!profile.hasAcceptedSensingConsent &&
-                (processingStatus == ProcessingStatus.RUNNING ||
+                (isSensingActive ||
+                    processingStatus == ProcessingStatus.RUNNING ||
                     processingStatus == ProcessingStatus.STARTING ||
                     processingStatus == ProcessingStatus.STOPPING)
             ) {
-                stopMeasurement()
+                stopMeasurement(userInitiated = false)
                 viewModel.clearVitalsSession()
+            } else if (profile.hasAcceptedSensingConsent &&
+                hasCameraPerm &&
+                !isSensingActive &&
+                !userManuallyStoppedSensing
+            ) {
+                startMeasurement(clearPreviousReadings = false)
+            }
+        }
+
+        // Auto-recover if SmartSpectra stops or enters ERROR while sensing is active
+        LaunchedEffect(isSensingActive, processingStatus, profile.hasAcceptedSensingConsent, hasCameraPerm) {
+            if (isSensingActive &&
+                profile.hasAcceptedSensingConsent &&
+                hasCameraPerm &&
+                (processingStatus == ProcessingStatus.ERROR || processingStatus == ProcessingStatus.IDLE)
+            ) {
+                kotlinx.coroutines.delay(1200L)
+                if (viewModel.isSensingActive.value &&
+                    profile.hasAcceptedSensingConsent &&
+                    hasCameraPerm
+                ) {
+                    startMeasurement(clearPreviousReadings = false)
+                }
             }
         }
 
@@ -259,14 +312,20 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        val effectiveProcessingStatus = if (isSensingActive) {
+            ProcessingStatus.RUNNING
+        } else {
+            processingStatus
+        }
+
         PersonalTrainerScreen(
             vitals = vitals,
             profile = profile,
             assistantState = assistantState,
             moodSpeculation = moodSpeculation,
-            processingStatus = processingStatus,
+            processingStatus = effectiveProcessingStatus,
             validationHint = validationStatus?.hint,
-            sdkErrorMessage = sdkError?.message,
+            sdkErrorMessage = if (isSensingActive) null else sdkError?.message,
             isPlaceholderPresageKey = viewModel.presageManager.isPlaceholderKey(),
             hasCameraPermission = hasCameraPerm,
             useFrontCamera = useFrontCamera,
@@ -293,16 +352,18 @@ class MainActivity : ComponentActivity() {
                 viewModel.dualStreamAnalyzer.isFrontCamera = useFrontCamera
             },
             onStartOrStopSensing = {
-                when (processingStatus) {
-                    ProcessingStatus.RUNNING -> stopMeasurement()
-                    ProcessingStatus.STARTING, ProcessingStatus.STOPPING -> Unit
-                    else -> {
-                        if (!profile.hasAcceptedSensingConsent) {
-                            pendingStartAfterConsent = true
-                            showConsentDialog = true
-                        } else {
-                            ensurePermissionAndStartMeasurement()
-                        }
+                if (isSensingActive || processingStatus == ProcessingStatus.RUNNING) {
+                    stopMeasurement(userInitiated = true)
+                } else if (processingStatus == ProcessingStatus.STARTING ||
+                    processingStatus == ProcessingStatus.STOPPING
+                ) {
+                    Unit
+                } else {
+                    if (!profile.hasAcceptedSensingConsent) {
+                        pendingStartAfterConsent = true
+                        showConsentDialog = true
+                    } else {
+                        ensurePermissionAndStartMeasurement()
                     }
                 }
             },

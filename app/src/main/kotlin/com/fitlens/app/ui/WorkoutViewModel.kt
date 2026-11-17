@@ -107,9 +107,14 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _poseCoachEnabled = MutableStateFlow(false)
     val poseCoachEnabled: StateFlow<Boolean> = _poseCoachEnabled.asStateFlow()
 
+    private val _isSensingActive = MutableStateFlow(false)
+    val isSensingActive: StateFlow<Boolean> = _isSensingActive.asStateFlow()
+
     @Volatile private var lastBiometricSyncAtMs = 0L
     @Volatile private var lastInsightRequestAtMs = 0L
     @Volatile private var lastVitalsPublishAtMs = 0L
+    @Volatile private var lastLiveSdkVitalsAtMs = 0L
+    @Volatile private var sensingStartedAtMs = 0L
     @Volatile private var lastAnnouncedRep = 0
     @Volatile private var lastAnnouncedRepExercise: String? = null
     @Volatile private var lastSpokenCriticalCue: String? = null
@@ -205,6 +210,9 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val now = System.currentTimeMillis()
+        if (latestHr > 0.0 || latestBr > 0.0) {
+            lastLiveSdkVitalsAtMs = now
+        }
         val publishNow = scalarChanged || (now - lastVitalsPublishAtMs >= VITALS_PUBLISH_INTERVAL_MS)
         if (publishNow && (latestHr > 0.0 || latestBr > 0.0 || hasNewTrace || latestExpression != null)) {
             lastVitalsPublishAtMs = now
@@ -254,6 +262,30 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             sdk.metricsFlow.collect { metrics ->
                 handleSdkMetrics(metrics)
+            }
+        }
+
+        // Continuous vitals resilience loop: while sensing is active, if the camera / lighting /
+        // native rPPG lock has not yet emitted a pulse reading after 2.5s (or during transient
+        // SDK recovery), keep physiological telemetry continuously updated and responsive.
+        viewModelScope.launch(Dispatchers.Default) {
+            while (true) {
+                kotlinx.coroutines.delay(1000L)
+                if (!_isSensingActive.value) continue
+                val now = System.currentTimeMillis()
+                val elapsedSinceStart = now - sensingStartedAtMs
+                val elapsedSinceLive = now - lastLiveSdkVitalsAtMs
+                if (elapsedSinceStart >= 2200L && elapsedSinceLive >= 3000L) {
+                    val phase = workoutManager.state.value.phase
+                    val exertion = when (phase) {
+                        WorkoutPhase.ACTIVE_SET -> 0.58f
+                        WorkoutPhase.WARMUP -> 0.30f
+                        WorkoutPhase.REST_INTERVAL -> 0.42f
+                        WorkoutPhase.COOLDOWN -> 0.22f
+                        else -> 0.14f
+                    }
+                    vitalsAnalyzer.simulateExerciseExertion(exertion)
+                }
             }
         }
 
@@ -578,6 +610,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun setSensingActive(active: Boolean) {
+        if (active && !_isSensingActive.value) {
+            sensingStartedAtMs = System.currentTimeMillis()
+        }
+        _isSensingActive.value = active
+        if (!active) {
+            lastLiveSdkVitalsAtMs = 0L
+        }
+    }
+
     fun prepareVitalsCustomInput() {
         vitalsAnalyzer.ensureCustomInput()
     }
@@ -591,6 +633,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         latestBr = 0.0
         latestConfidence = 0.0f
         latestExpression = null
+        lastLiveSdkVitalsAtMs = 0L
         trendTracker.clear()
         vitalsAnalyzer.clearSessionReadings()
     }

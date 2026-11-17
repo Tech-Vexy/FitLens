@@ -34,7 +34,7 @@ class DualStreamAnalyzer(
         private const val TAG = "DualStreamAnalyzer"
         private const val AI_FRAME_INTERVAL_MS = 2000L
         private const val AI_FRAME_MAX_DIM = 320
-        private const val POSE_FRAME_INTERVAL_MS = 100L
+        private const val POSE_FRAME_INTERVAL_MS = 140L
     }
 
     @Volatile var poseAnalysisEnabled: Boolean = false
@@ -47,82 +47,91 @@ class DualStreamAnalyzer(
     @Volatile private var lastPoseFrameAtMs = 0L
 
     override fun analyze(imageProxy: ImageProxy) {
-        val now = System.currentTimeMillis()
+        try {
+            // 1. Dispatch to SmartSpectra FIRST so plane buffers are untouched and
+            // frame delivery is never delayed by bitmap conversion (avoids TIMESTAMP_GAP
+            // and FRAME_CONVERSION_FAILED).
+            presageAnalyzer.submitFrameWithoutClosing(imageProxy)
 
-        val poseManager = poseLandmarkManager
-        val poseCallback = onPoseFrame
-        if (poseAnalysisEnabled &&
-            poseManager != null &&
-            poseCallback != null &&
-            now - lastPoseFrameAtMs >= POSE_FRAME_INTERVAL_MS &&
-            isPoseFrameBusy.compareAndSet(false, true)
-        ) {
-            lastPoseFrameAtMs = now
-            val poseBitmap = runCatching {
-                poseManager.extractUprightBitmap(imageProxy, isFrontCamera)
-            }.getOrNull()
+            val now = System.currentTimeMillis()
 
-            if (poseBitmap != null) {
-                runCatching {
-                    poseFrameExecutor.execute {
-                        try {
-                            val frame = poseManager.analyzeBitmap(poseBitmap)
-                            poseCallback.invoke(frame)
-                        } catch (e: Exception) {
-                            Log.v(TAG, "Pose analysis skipped: ${e.message}")
-                        } finally {
-                            poseBitmap.recycle()
-                            isPoseFrameBusy.set(false)
+            // 2. Throttled MediaPipe Pose analysis
+            val poseManager = poseLandmarkManager
+            val poseCallback = onPoseFrame
+            if (poseAnalysisEnabled &&
+                poseManager != null &&
+                poseCallback != null &&
+                now - lastPoseFrameAtMs >= POSE_FRAME_INTERVAL_MS &&
+                isPoseFrameBusy.compareAndSet(false, true)
+            ) {
+                lastPoseFrameAtMs = now
+                val poseBitmap = runCatching {
+                    poseManager.extractUprightBitmap(imageProxy, isFrontCamera)
+                }.getOrNull()
+
+                if (poseBitmap != null) {
+                    runCatching {
+                        poseFrameExecutor.execute {
+                            try {
+                                val frame = poseManager.analyzeBitmap(poseBitmap)
+                                poseCallback.invoke(frame)
+                            } catch (e: Exception) {
+                                Log.v(TAG, "Pose analysis skipped: ${e.message}")
+                            } finally {
+                                poseBitmap.recycle()
+                                isPoseFrameBusy.set(false)
+                            }
                         }
+                    }.onFailure {
+                        poseBitmap.recycle()
+                        isPoseFrameBusy.set(false)
                     }
-                }.onFailure {
-                    poseBitmap.recycle()
+                } else {
                     isPoseFrameBusy.set(false)
                 }
-            } else {
-                isPoseFrameBusy.set(false)
             }
-        }
 
-        val aiCallback = onVideoFrameForAi
-        if (enableLiveVideoFrames &&
-            aiCallback != null &&
-            now - lastAiFrameAtMs >= AI_FRAME_INTERVAL_MS &&
-            isAiFrameBusy.compareAndSet(false, true)
-        ) {
-            lastAiFrameAtMs = now
-            val aiBitmap = runCatching {
-                extractUprightBitmap(imageProxy, isFrontCamera)
-            }.getOrNull()
+            // 3. Throttled Gemini Live AI video frame
+            val aiCallback = onVideoFrameForAi
+            if (enableLiveVideoFrames &&
+                aiCallback != null &&
+                now - lastAiFrameAtMs >= AI_FRAME_INTERVAL_MS &&
+                isAiFrameBusy.compareAndSet(false, true)
+            ) {
+                lastAiFrameAtMs = now
+                for (plane in imageProxy.planes) {
+                    runCatching { plane.buffer.rewind() }
+                }
+                val aiBitmap = runCatching {
+                    extractUprightBitmap(imageProxy, isFrontCamera)
+                }.getOrNull()
 
-            if (aiBitmap != null) {
-                runCatching {
-                    aiFrameExecutor.execute {
-                        try {
-                            val jpegBytes = compressForLiveAi(aiBitmap)
-                            if (jpegBytes.isNotEmpty()) {
-                                aiCallback.invoke(jpegBytes)
+                if (aiBitmap != null) {
+                    runCatching {
+                        aiFrameExecutor.execute {
+                            try {
+                                val jpegBytes = compressForLiveAi(aiBitmap)
+                                if (jpegBytes.isNotEmpty()) {
+                                    aiCallback.invoke(jpegBytes)
+                                }
+                            } catch (e: Exception) {
+                                Log.v(TAG, "AI frame compression skipped: ${e.message}")
+                            } finally {
+                                aiBitmap.recycle()
+                                isAiFrameBusy.set(false)
                             }
-                        } catch (e: Exception) {
-                            Log.v(TAG, "AI frame compression skipped: ${e.message}")
-                        } finally {
-                            aiBitmap.recycle()
-                            isAiFrameBusy.set(false)
                         }
+                    }.onFailure {
+                        aiBitmap.recycle()
+                        isAiFrameBusy.set(false)
                     }
-                }.onFailure {
-                    aiBitmap.recycle()
+                } else {
                     isAiFrameBusy.set(false)
                 }
-            } else {
-                isAiFrameBusy.set(false)
             }
-        }
-
-        try {
-            presageAnalyzer.analyze(imageProxy)
         } catch (e: Exception) {
-            Log.w(TAG, "Presage frame dispatch failed: ${e.message}")
+            Log.w(TAG, "DualStream frame dispatch failed: ${e.message}")
+        } finally {
             runCatching { imageProxy.close() }
         }
     }

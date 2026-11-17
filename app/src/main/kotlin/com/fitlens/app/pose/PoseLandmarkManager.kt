@@ -134,7 +134,7 @@ class PoseLandmarkManager(
          * a dynamic concentric/eccentric repetition movement.
          */
         fun isIsometricExercise(exercise: String): Boolean {
-            return exercise.trim().equals("plank", ignoreCase = true)
+            return exercise.trim().contains("plank", ignoreCase = true)
         }
     }
 

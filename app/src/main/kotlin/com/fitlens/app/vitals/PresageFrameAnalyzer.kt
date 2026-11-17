@@ -74,6 +74,10 @@ class PresageFrameAnalyzer(
 
     @Volatile private var customInput: com.presagetech.smartspectra.CustomInput? = null
     @Volatile private var frameTransform: FrameTransform = FrameTransform.NONE
+    @Volatile var lastFrameSubmittedAtMs: Long = 0L
+        private set
+    @Volatile var submittedFrameCount: Long = 0L
+        private set
 
     // -----------------------------------------------------------------------
     // Camera frame submission
@@ -91,23 +95,38 @@ class PresageFrameAnalyzer(
     }
 
     /**
-     * Obtains or reuses the [CustomInput] handle. Must be called while the SDK is stopped
+     * Obtains a fresh [CustomInput] handle. Must be called while the SDK is stopped
      * (before [SmartSpectraSdk.start]), per the SmartSpectra headless-mode contract.
+     * Automatically resets the SDK if a previous session left it in ERROR state.
      */
     @Synchronized
     fun ensureCustomInput(): com.presagetech.smartspectra.CustomInput {
-        return customInput ?: SmartSpectraSdk.shared.useCustomInput(frameTransform).also {
+        val sdk = SmartSpectraSdk.shared
+        val status = sdk.processingStatus.value
+        if (status != null && status != ProcessingStatus.IDLE) {
+            runCatching { sdk.reset() }
+        }
+        return sdk.useCustomInput(frameTransform).also {
             customInput = it
         }
     }
 
-    override fun analyze(imageProxy: ImageProxy) {
+    /**
+     * Submits [imageProxy] to SmartSpectra without closing it, rewinding plane buffers
+     * before and after so downstream analyzers (MediaPipe / Gemini Live) can also read the frame.
+     */
+    fun submitFrameWithoutClosing(imageProxy: ImageProxy) {
         try {
+            lastFrameSubmittedAtMs = System.currentTimeMillis()
+            submittedFrameCount++
             if (SmartSpectraSdk.shared.processingStatus.value != ProcessingStatus.RUNNING) {
                 return
             }
 
             val input = customInput ?: return
+            for (plane in imageProxy.planes) {
+                runCatching { plane.buffer.rewind() }
+            }
             when (val result = input.sendFrame(imageProxy)) {
                 is FrameSubmissionResult.Accepted -> Unit
                 is FrameSubmissionResult.Rejected -> {
@@ -116,6 +135,16 @@ class PresageFrameAnalyzer(
             }
         } catch (e: Exception) {
             Log.v(TAG, "sendFrame skipped: ${e.message}")
+        } finally {
+            for (plane in imageProxy.planes) {
+                runCatching { plane.buffer.rewind() }
+            }
+        }
+    }
+
+    override fun analyze(imageProxy: ImageProxy) {
+        try {
+            submitFrameWithoutClosing(imageProxy)
         } finally {
             imageProxy.close()
         }

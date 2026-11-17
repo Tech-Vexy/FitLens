@@ -1,13 +1,14 @@
 package com.fitlens.app.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,11 +21,16 @@ import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.testing.SmokeTestGateResult
 import kotlin.math.roundToInt
 
-/**
- * Informed Consent Modal required before camera & contactless physiological sensing starts.
- * Covers camera usage, local-only storage, retention/deletion, SDK diagnostic telemetry opt-out,
- * optional non-biometric AI usage, and the non-medical wellness disclaimer.
- */
+private val SHEET_BG = Color(0xFF09090B)
+private val SHEET_CARD = Color(0xFF121216)
+private val SHEET_ELEVATED = Color(0xFF1A1A20)
+private val SHEET_BORDER = Color(0xFF27272A)
+private val SHEET_LIME = Color(0xFFA3E635)
+private val SHEET_EMERALD = Color(0xFF10B981)
+private val SHEET_ROSE = Color(0xFFF43F5E)
+private val SHEET_WHITE = Color(0xFFFAFAFA)
+private val SHEET_ZINC = Color(0xFFA1A1AA)
+
 @Composable
 fun SensingConsentDialog(
     initialTelemetryEnabled: Boolean,
@@ -37,9 +43,9 @@ fun SensingConsentDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF151B28),
-        titleContentColor = Color.White,
-        textContentColor = Color(0xFFD5DCE6),
+        containerColor = SHEET_CARD,
+        titleContentColor = SHEET_WHITE,
+        textContentColor = SHEET_ZINC,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -48,10 +54,10 @@ fun SensingConsentDialog(
                 Icon(
                     imageVector = Icons.Default.VerifiedUser,
                     contentDescription = null,
-                    tint = Color(0xFF6EE7B7)
+                    tint = SHEET_LIME
                 )
                 Text(
-                    text = "Camera & Biometric Sensing Consent",
+                    text = "Camera & Vitals Consent",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -61,32 +67,24 @@ fun SensingConsentDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 ConsentBullet(
-                    title = "Live On-Device Camera Signals",
-                    body = "FitLens AI uses your camera only while active on screen to compute pulse, breathing rate, HRV, and facial expressions via the Presage SmartSpectra SDK. Raw video frames stay in volatile memory unless you start a Gemini Live voice/video session."
+                    title = "Contactless Vitals & Pose",
+                    body = "Uses the camera while active to measure pulse, breathing, HRV, and exercise reps on-device."
                 )
                 ConsentBullet(
-                    title = "100% Local Vault, Export & Deletion",
-                    body = "Local records are saved strictly on your device in local SQLite (fitlens_health_sqlite.db). You can permanently delete all local data anytime in Profile & Privacy."
-                )
-                ConsentBullet(
-                    title = "Presage SDK Gating & Telemetry",
-                    body = "SmartSpectra connects to Presage to authenticate the API key and optionally reports aggregate per-session stability diagnostics (containing zero video frames, zero vital values, and zero user/device IDs). You can opt out below."
-                )
-                ConsentBullet(
-                    title = "Gemini Live Personal AI Trainer",
-                    body = "When you tap Talk Live or send a message, your personal AI trainer uses Firebase AI Logic (Gemini Live API) with your microphone and current mood/vitals context to converse with you, or falls back to local on-device responses if offline mode is enabled."
+                    title = "Local Storage",
+                    body = "Workout history stays on your device and can be erased anytime."
                 )
 
                 Surface(
-                    color = Color(0xFF1F293D),
-                    shape = RoundedCornerShape(10.dp)
+                    color = SHEET_ELEVATED,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, SHEET_BORDER)
                 ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -94,14 +92,14 @@ fun SensingConsentDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "SmartSpectra Diagnostic Telemetry",
-                                    color = Color.White,
+                                    "SDK Diagnostic Telemetry",
+                                    color = SHEET_WHITE,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    "Aggregate SDK quality stats only (no vitals/frames)",
-                                    color = Color.Gray,
+                                    "Anonymous stability stats (no video or vitals)",
+                                    color = SHEET_ZINC,
                                     fontSize = 10.sp
                                 )
                             }
@@ -112,7 +110,7 @@ fun SensingConsentDialog(
                         }
                         HorizontalDivider(
                             modifier = Modifier.padding(vertical = 6.dp),
-                            color = Color.White.copy(alpha = 0.08f)
+                            color = SHEET_BORDER
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -121,14 +119,14 @@ fun SensingConsentDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "100% Offline On-Device Edge AI",
-                                    color = Color.White,
+                                    "Offline Edge AI Mode",
+                                    color = SHEET_WHITE,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    "Disable Firebase Cloud AI (use local assistant responses)",
-                                    color = Color.Gray,
+                                    "Keep AI coaching 100% on-device",
+                                    color = SHEET_ZINC,
                                     fontSize = 10.sp
                                 )
                             }
@@ -140,31 +138,25 @@ fun SensingConsentDialog(
                     }
                 }
 
-                Surface(
-                    color = Color(0xFFFBBF24).copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text(
-                        text = "Personal AI Trainer & Wellness Only: FitLens AI is not a medical device and does not diagnose, treat, prevent disease, or support medical decision-making.",
-                        color = Color(0xFFFDE68A),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(10.dp)
-                    )
-                }
+                Text(
+                    text = "Wellness use only — not a medical device.",
+                    color = SHEET_ZINC,
+                    fontSize = 11.sp
+                )
             }
         },
         confirmButton = {
             Button(
                 onClick = { onAccept(telemetryEnabled, preferLocalEdgeAi) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6EE7B7))
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = SHEET_LIME)
             ) {
-                Text("Agree & Enable Sensing", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Enable Sensing", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Not Now", color = Color.LightGray)
+                Text("Cancel", color = SHEET_ZINC)
             }
         }
     )
@@ -173,14 +165,11 @@ fun SensingConsentDialog(
 @Composable
 private fun ConsentBullet(title: String, body: String) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title, color = Color(0xFF6EE7B7), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Text(body, color = Color(0xFFD5DCE6), fontSize = 11.sp, lineHeight = 15.sp)
+        Text(title, color = SHEET_WHITE, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(body, color = SHEET_ZINC, fontSize = 12.sp, lineHeight = 16.sp)
     }
 }
 
-/**
- * Athlete Profile, Karvonen HR Zones, Privacy Controls, Hard Gate Diagnostics & Data Deletion Sheet.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileAndPrivacySheet(
@@ -206,7 +195,6 @@ fun ProfileAndPrivacySheet(
         mutableStateOf(profile.hasAcceptedSensingConsent)
     }
     var confirmDelete by remember { mutableStateOf(false) }
-    var dataDeletedBanner by remember { mutableStateOf(false) }
 
     val previewProfile = profile.copy(
         name = name.ifBlank { "Athlete" },
@@ -220,8 +208,8 @@ fun ProfileAndPrivacySheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF131926),
-        contentColor = Color.White
+        containerColor = SHEET_BG,
+        contentColor = SHEET_WHITE
     ) {
         Column(
             modifier = Modifier
@@ -236,23 +224,16 @@ fun ProfileAndPrivacySheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text("Profile, Zones & Privacy", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "Personalized Karvonen HRR & Responsible Data Controls",
-                        fontSize = 11.sp,
-                        color = Color(0xFF6EE7B7)
-                    )
-                }
+                Text("Profile & Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.LightGray)
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = SHEET_ZINC)
                 }
             }
 
-            // Athlete physiology sliders
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C2436)),
-                shape = RoundedCornerShape(14.dp)
+            Surface(
+                color = SHEET_CARD,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, SHEET_BORDER)
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
@@ -261,16 +242,12 @@ fun ProfileAndPrivacySheet(
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it.take(30) },
-                        label = { Text("Athlete Name") },
+                        label = { Text("Name") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    Text(
-                        "Age: ${age.roundToInt()} yrs  •  Tanaka Est. Max: ${(208 - 0.7 * age.roundToInt()).roundToInt()} bpm",
-                        fontSize = 12.sp,
-                        color = Color.LightGray
-                    )
+                    Text("Age: ${age.roundToInt()} yrs", fontSize = 12.sp, color = SHEET_ZINC)
                     Slider(
                         value = age,
                         onValueChange = {
@@ -280,59 +257,30 @@ fun ProfileAndPrivacySheet(
                         valueRange = 18f..80f
                     )
 
-                    Text("Resting Heart Rate: ${restingHr.roundToInt()} bpm", fontSize = 12.sp, color = Color.LightGray)
+                    Text("Resting HR: ${restingHr.roundToInt()} bpm • Max HR: ${maxHr.roundToInt()} bpm", fontSize = 12.sp, color = SHEET_ZINC)
                     Slider(
                         value = restingHr,
                         onValueChange = { restingHr = it },
                         valueRange = 42f..100f
                     )
-
-                    Text("Max Heart Rate: ${maxHr.roundToInt()} bpm", fontSize = 12.sp, color = Color.LightGray)
-                    Slider(
-                        value = maxHr,
-                        onValueChange = { maxHr = it },
-                        valueRange = 130f..210f
-                    )
-
-                    // Live Karvonen Zones Preview
-                    Text(
-                        "Personalized Karvonen HR Zones",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFA58CF9)
-                    )
-                    previewProfile.getKarvonenZoneThresholds().forEach { (zone, range) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(zone.label, fontSize = 11.sp, color = Color(zone.colorHex))
-                            Text("${range.first}–${range.last} bpm", fontSize = 11.sp, color = Color.White)
-                        }
-                    }
                 }
             }
 
-            // Privacy, Consent & SDK Telemetry Controls
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C2436)),
-                shape = RoundedCornerShape(14.dp)
+            Surface(
+                color = SHEET_CARD,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, SHEET_BORDER)
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Consent, Telemetry & AI Routing", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Camera & Human-Sensing Consent", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Required before live camera vitals/pose capture", fontSize = 10.sp, color = Color.Gray)
-                        }
+                        Text("Camera Sensing Consent", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Switch(checked = consentAccepted, onCheckedChange = { consentAccepted = it })
                     }
 
@@ -341,10 +289,7 @@ fun ProfileAndPrivacySheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("SmartSpectra Aggregate Telemetry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Opt-out SDK release stability diagnostics (zero vitals/frames)", fontSize = 10.sp, color = Color.Gray)
-                        }
+                        Text("SDK Diagnostic Telemetry", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Switch(checked = telemetryEnabled, onCheckedChange = { telemetryEnabled = it })
                     }
 
@@ -353,111 +298,62 @@ fun ProfileAndPrivacySheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("100% On-Device Edge AI Mode", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Keep even workout plan generation offline via LocalEdgeEngine", fontSize = 10.sp, color = Color.Gray)
-                        }
+                        Text("Offline Edge AI Mode", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Switch(checked = preferLocalEdgeAi, onCheckedChange = { preferLocalEdgeAi = it })
                     }
                 }
             }
 
-            // Headless Day 1 Hard Gate Smoke Test Runner (for Judges & CI verification)
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C2436)),
-                shape = RoundedCornerShape(14.dp)
+            Surface(
+                color = SHEET_CARD,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, SHEET_BORDER)
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Automated Pipeline Verification", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text(
-                        "Verifies headless SmartSpectra vitals + MediaPipe 33-landmark pipeline without requiring live lighting.",
-                        fontSize = 11.sp,
-                        color = Color.LightGray
-                    )
                     OutlinedButton(
                         onClick = onRunSmokeTest,
                         enabled = !isRunningSmokeTest,
+                        border = BorderStroke(1.dp, SHEET_BORDER),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            if (isRunningSmokeTest) "Running 30-Frame Verification…" else "Run Day 1 Hard Gate Smoke Test",
-                            color = Color(0xFF4FCCC4),
+                            if (isRunningSmokeTest) "Verifying Pipeline…" else "Run Pipeline Smoke Test",
+                            color = SHEET_LIME,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                     smokeTestResult?.let { res ->
-                        Surface(
-                            color = if (res.presageGatePassed && res.mediaPipeGatePassed)
-                                Color(0xFF00E676).copy(alpha = 0.16f)
-                            else Color(0xFFFF6B6B).copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                text = res.message,
-                                fontSize = 11.sp,
-                                color = if (res.presageGatePassed && res.mediaPipeGatePassed) Color(0xFF6EE7B7) else Color(0xFFFF6B6B),
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
+                        Text(
+                            text = res.message,
+                            fontSize = 11.sp,
+                            color = if (res.presageGatePassed && res.mediaPipeGatePassed) SHEET_EMERALD else SHEET_ROSE
+                        )
                     }
-                }
-            }
 
-            // Local Vault Data Deletion
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF281822)),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Local Health Data Deletion", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFFFF8A80))
-                    Text(
-                        "Permanently erases all workout sessions, rPPG vitals logs, and biomechanical fault records from fitlens_health_sqlite.db.",
-                        fontSize = 11.sp,
-                        color = Color.LightGray
-                    )
                     if (!confirmDelete) {
                         OutlinedButton(
                             onClick = { confirmDelete = true },
-                            border = BorderStroke(1.dp, Color(0xFFFF6B6B)),
+                            border = BorderStroke(1.dp, SHEET_ROSE.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color(0xFFFF6B6B))
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = SHEET_ROSE, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Delete All Local Vault Data", color = Color(0xFFFF6B6B))
+                            Text("Clear Local Data", color = SHEET_ROSE)
                         }
                     } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = {
-                                    onDeleteAllData()
-                                    confirmDelete = false
-                                    dataDeletedBanner = true
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Confirm Erase", color = Color.Black, fontWeight = FontWeight.Bold)
-                            }
-                            OutlinedButton(
-                                onClick = { confirmDelete = false },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Cancel", color = Color.White)
-                            }
+                        Button(
+                            onClick = {
+                                onDeleteAllData()
+                                confirmDelete = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SHEET_ROSE),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Confirm Delete All Data", color = SHEET_WHITE, fontWeight = FontWeight.Bold)
                         }
-                    }
-                    if (dataDeletedBanner) {
-                        Text(
-                            "All local SQLite sessions, vitals, and fault records have been permanently deleted.",
-                            fontSize = 11.sp,
-                            color = Color(0xFF6EE7B7)
-                        )
                     }
                 }
             }
@@ -469,11 +365,11 @@ fun ProfileAndPrivacySheet(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6EE7B7))
+                    .height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = SHEET_LIME)
             ) {
-                Text("Save Profile & Privacy Preferences", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Save", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
