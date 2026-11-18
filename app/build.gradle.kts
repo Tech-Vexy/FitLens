@@ -155,6 +155,7 @@ dependencies {
     // Provides com.google.common.util.concurrent.ListenableFuture used by CameraX APIs
     implementation("androidx.concurrent:concurrent-futures:1.3.0")
 
+
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
     implementation("com.presagetech:smartspectra:3.4.0")
 
@@ -183,4 +184,12 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// Force the real listenablefuture jar; Guava's 9999.0-empty placeholder wins
+// conflict resolution otherwise and ships no classes.
+configurations.all {
+    resolutionStrategy {
+        force("com.google.guava:listenablefuture:1.0")
+    }
 }

@@ -99,7 +99,6 @@ class PresageFrameAnalyzer(
      * (before [SmartSpectraSdk.start]), per the SmartSpectra headless-mode contract.
      * Automatically resets the SDK if a previous session left it in ERROR state.
      */
-    @Synchronized
     suspend fun ensureCustomInput(): com.presagetech.smartspectra.CustomInput {
         val sdk = SmartSpectraSdk.shared
         val status = sdk.processingStatus.value
