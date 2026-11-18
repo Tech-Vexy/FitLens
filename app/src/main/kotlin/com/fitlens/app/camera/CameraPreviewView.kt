@@ -29,13 +29,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.fitlens.app.ui.FitLensPalette
 import java.util.concurrent.Executors
 
 @OptIn(ExperimentalCamera2Interop::class)
@@ -165,12 +165,12 @@ fun CameraPreviewView(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(Color(0xFF161B26)),
+                .background(FitLensPalette.ElevatedAlt),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = "Camera unavailable on this device/emulator.\nLive Simulation Controls are ready below.",
-                color = Color.LightGray,
+                color = FitLensPalette.Zinc,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(24.dp)
             )

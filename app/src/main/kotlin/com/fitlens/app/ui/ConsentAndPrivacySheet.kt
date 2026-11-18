@@ -21,15 +21,16 @@ import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.testing.SmokeTestGateResult
 import kotlin.math.roundToInt
 
-private val SHEET_BG = Color(0xFF09090B)
-private val SHEET_CARD = Color(0xFF121216)
-private val SHEET_ELEVATED = Color(0xFF1A1A20)
-private val SHEET_BORDER = Color(0xFF27272A)
-private val SHEET_LIME = Color(0xFFA3E635)
-private val SHEET_EMERALD = Color(0xFF10B981)
-private val SHEET_ROSE = Color(0xFFF43F5E)
-private val SHEET_WHITE = Color(0xFFFAFAFA)
-private val SHEET_ZINC = Color(0xFFA1A1AA)
+// Colors sourced from FitLensPalette in FitLensTheme.kt
+private val SHEET_BG = FitLensPalette.Obsidian
+private val SHEET_CARD = FitLensPalette.Card
+private val SHEET_ELEVATED = FitLensPalette.Elevated
+private val SHEET_BORDER = FitLensPalette.Border
+private val SHEET_LIME = FitLensPalette.Lime
+private val SHEET_EMERALD = FitLensPalette.Emerald
+private val SHEET_ROSE = FitLensPalette.Rose
+private val SHEET_WHITE = FitLensPalette.White
+private val SHEET_ZINC = FitLensPalette.Zinc
 
 @Composable
 fun SensingConsentDialog(

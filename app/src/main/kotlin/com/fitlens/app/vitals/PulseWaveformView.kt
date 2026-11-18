@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.fitlens.app.ui.FitLensPalette
 
 /**
  * PulseWaveformView renders the real-time arterial pressure trace / photoplethysmogram (rPPG)
@@ -20,7 +21,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun PulseWaveformView(
     waveformSamples: List<Float>,
-    lineColor: Color = Color(0xFF00E676),
+    lineColor: Color = FitLensPalette.Emerald,
     modifier: Modifier = Modifier
 ) {
     if (waveformSamples.isEmpty()) return

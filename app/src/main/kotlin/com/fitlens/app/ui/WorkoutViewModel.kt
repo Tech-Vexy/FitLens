@@ -22,9 +22,6 @@ import com.fitlens.app.data.WorkoutRepository
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserPreferencesRepository
 import com.fitlens.app.data.profile.UserProfile
-import com.fitlens.app.pose.DeviationSeverity
-import com.fitlens.app.pose.PoseAnalysisFrame
-import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.testing.HeadlessVideoFeeder
 import com.fitlens.app.testing.SmokeTestGateResult
 import com.fitlens.app.vitals.PresageFrameAnalyzer
@@ -58,16 +55,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val liveAssistant = GeminiLiveAssistant()
     private val trendTracker = BiometricTrendTracker()
 
-    // Biomechanics coach: shared MediaPipe pose engine + deterministic workout
-    // state machine + on-device TTS cues. All processing stays on-device.
+    // Biomechanics coach: deterministic workout state machine + on-device TTS cues.
     private val coachAgent = FitnessCoachAgent()
-    private val poseLandmarkManager = PoseLandmarkManager(application)
-    val workoutManager = WorkoutManager(
-        coachAgent = coachAgent,
-        poseLandmarkManager = poseLandmarkManager
-    )
+    val workoutManager = WorkoutManager(coachAgent = coachAgent)
     private val audioCoach = FitLensAudioCoach(application)
-    private val headlessVideoFeeder = HeadlessVideoFeeder(vitalsAnalyzer, poseLandmarkManager)
+    private val headlessVideoFeeder = HeadlessVideoFeeder(vitalsAnalyzer)
 
     val vitalsFlow = vitalsAnalyzer.vitalsFlow
     val assistantState: StateFlow<LiveAssistantState> = liveAssistant.state
@@ -101,11 +93,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _userProfile = MutableStateFlow(UserProfile())
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
-    private val _poseFrame = MutableStateFlow<PoseAnalysisFrame?>(null)
-    val poseFrame: StateFlow<PoseAnalysisFrame?> = _poseFrame.asStateFlow()
-
-    private val _poseCoachEnabled = MutableStateFlow(false)
-    val poseCoachEnabled: StateFlow<Boolean> = _poseCoachEnabled.asStateFlow()
 
     private val _isSensingActive = MutableStateFlow(false)
     val isSensingActive: StateFlow<Boolean> = _isSensingActive.asStateFlow()
@@ -115,18 +102,13 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     @Volatile private var lastVitalsPublishAtMs = 0L
     @Volatile private var lastLiveSdkVitalsAtMs = 0L
     @Volatile private var sensingStartedAtMs = 0L
-    @Volatile private var lastAnnouncedRep = 0
-    @Volatile private var lastAnnouncedRepExercise: String? = null
-    @Volatile private var lastSpokenCriticalCue: String? = null
     @Volatile private var lastWorkoutPhase: WorkoutPhase? = null
     @Volatile private var completionSessionSaved = false
 
     val dualStreamAnalyzer = DualStreamAnalyzer(
         presageAnalyzer = vitalsAnalyzer,
         enableLiveVideoFrames = false,
-        onVideoFrameForAi = { jpeg -> liveAssistant.sendVideoFrame(jpeg) },
-        poseLandmarkManager = poseLandmarkManager,
-        onPoseFrame = { frame -> onPoseAnalysisFrame(frame) }
+        onVideoFrameForAi = { jpeg -> liveAssistant.sendVideoFrame(jpeg) }
     )
 
     private val repository: WorkoutRepository by lazy {
@@ -356,44 +338,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Invoked on the pose-analysis worker thread for each throttled MediaPipe frame.
-     * Feeds the shared rep counter / form-deviation engine and the live HUD.
-     */
-    private fun onPoseAnalysisFrame(frame: PoseAnalysisFrame) {
-        // A frame already in flight when the coach is disabled must not resurrect
-        // the skeleton overlay or fire voice cues.
-        if (!_poseCoachEnabled.value) return
-
-        _poseFrame.value = frame
-        workoutManager.onPoseFrame(frame)
-
-        val workout = workoutManager.state.value
-        if (workout.phase != WorkoutPhase.ACTIVE_SET) return
-        if (!frame.currentExercise.equals(workout.exerciseName, ignoreCase = true)) return
-
-        val exercise = frame.currentExercise
-        if (exercise != lastAnnouncedRepExercise) {
-            lastAnnouncedRepExercise = exercise
-            lastAnnouncedRep = 0
-        }
-        if (frame.currentRepCount > lastAnnouncedRep) {
-            lastAnnouncedRep = frame.currentRepCount
-            audioCoach.speakRepCount(frame.currentRepCount)
-        }
-
-        // Speak each distinct critical fault once per occurrence instead of
-        // re-queuing the same sentence at 10 fps.
-        val criticalCue = frame.activeDeviations
-            .firstOrNull { it.severity == DeviationSeverity.CRITICAL }
-            ?.message
-        if (criticalCue == null) {
-            lastSpokenCriticalCue = null
-        } else if (criticalCue != lastSpokenCriticalCue) {
-            lastSpokenCriticalCue = criticalCue
-            audioCoach.speakCorrection(criticalCue)
-        }
-    }
 
     private fun handleWorkoutState(workout: WorkoutState) {
         val previous = lastWorkoutPhase
@@ -410,8 +354,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     persistCompletedSession()
                 }
                 WorkoutPhase.ACTIVE_SET -> {
-                    lastAnnouncedRep = 0
-                    lastSpokenCriticalCue = null
                     if (previous == WorkoutPhase.WARMUP ||
                         previous == WorkoutPhase.REST_INTERVAL ||
                         previous == null
@@ -438,43 +380,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Toggles the MediaPipe pose coach lane (skeleton overlay, rep counting,
-     * form-deviation alerts, and TTS cues). Requires camera consent + permission.
-     */
-    fun setPoseCoachEnabled(enabled: Boolean) {
-        _poseCoachEnabled.value = enabled
-        dualStreamAnalyzer.poseAnalysisEnabled = enabled
-        if (enabled) {
-            viewModelScope.launch(Dispatchers.Default) { poseLandmarkManager.warmUp() }
-        } else {
-            _poseFrame.value = null
-            lastSpokenCriticalCue = null
-            lastAnnouncedRep = 0
-            lastAnnouncedRepExercise = null
-            val phase = workoutManager.state.value.phase
-            if (phase != WorkoutPhase.IDLE && phase != WorkoutPhase.COMPLETED) {
-                stopWorkout()
-            }
-        }
-    }
 
     /**
-     * Selects a coached exercise (e.g. "Bodyweight Squats", "Push-ups", "Lunges", "Plank")
-     * and starts a fresh workout session with the shared pose engine.
+     * Selects an exercise and starts a fresh workout session.
      */
     fun selectExercise(exercise: String) {
         val normalized = exercise.trim()
         if (normalized.isEmpty()) return
-        if (!_poseCoachEnabled.value) {
-            setPoseCoachEnabled(true)
-        }
-        val isometric = PoseLandmarkManager.isIsometricExercise(normalized)
+        val isometric = com.fitlens.app.workout.isIsometricExercise(normalized)
         completionSessionSaved = false
         lastWorkoutPhase = null
-        lastAnnouncedRep = 0
-        lastAnnouncedRepExercise = normalized
-        lastSpokenCriticalCue = null
         workoutManager.startWorkout(
             exercise = normalized,
             targetReps = if (isometric) 30 else 10,
@@ -525,16 +440,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         includeWarmup: Boolean = true,
         includeCooldown: Boolean = true
     ) {
-        if (!_poseCoachEnabled.value) {
-            setPoseCoachEnabled(true)
-        }
         val firstEx = plan.targetExercises.firstOrNull() ?: "Bodyweight Squats"
-        val isometric = PoseLandmarkManager.isIsometricExercise(firstEx)
+        val isometric = com.fitlens.app.workout.isIsometricExercise(firstEx)
         completionSessionSaved = false
         lastWorkoutPhase = null
-        lastAnnouncedRep = 0
-        lastAnnouncedRepExercise = firstEx
-        lastSpokenCriticalCue = null
         workoutManager.startRoutine(
             exercises = plan.targetExercises,
             targetReps = if (isometric) 30 else 12,
@@ -550,7 +459,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         workoutManager.incrementRep()
         val after = workoutManager.state.value
         if (after.phase == WorkoutPhase.ACTIVE_SET && after.completedReps > beforeReps && !after.isIsometricHold) {
-            lastAnnouncedRep = after.completedReps
             audioCoach.speakRepCount(after.completedReps)
         }
     }
@@ -579,9 +487,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         // Suppress the automatic completion announcement/persist path, then save
         // the partial session exactly once from here.
         lastWorkoutPhase = WorkoutPhase.COMPLETED
-        lastAnnouncedRep = 0
-        lastAnnouncedRepExercise = null
-        lastSpokenCriticalCue = null
         viewModelScope.launch(Dispatchers.Default) {
             runCatching {
                 val entity = workoutManager.finishWorkout()
@@ -749,7 +654,6 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         dualStreamAnalyzer.shutdown()
         liveAssistant.shutdown()
         workoutManager.cleanup()
-        poseLandmarkManager.close()
         audioCoach.shutdown()
     }
 }

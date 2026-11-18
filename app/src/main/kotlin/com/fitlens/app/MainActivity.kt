@@ -22,6 +22,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.fitlens.app.ai.live.LiveConnectionState
+import com.fitlens.app.ui.FitLensTheme
 import com.fitlens.app.ui.PersonalTrainerScreen
 import com.fitlens.app.ui.ProfileAndPrivacySheet
 import com.fitlens.app.ui.SensingConsentDialog
@@ -102,7 +103,11 @@ class MainActivity : ComponentActivity() {
             enableTelemetry = workoutViewModel.userProfile.value.smartSpectraTelemetryEnabled
         )
 
-        setContent { FitLensNavHost() }
+        setContent {
+            FitLensTheme {
+                FitLensNavHost()
+            }
+        }
     }
 
     override fun onResume() {
@@ -230,9 +235,7 @@ class MainActivity : ComponentActivity() {
         val profile by viewModel.userProfile.collectAsState()
         val assistantState by viewModel.assistantState.collectAsState()
         val moodSpeculation by viewModel.moodSpeculation.collectAsState()
-        val poseFrame by viewModel.poseFrame.collectAsState()
         val workoutState by viewModel.workoutState.collectAsState()
-        val poseCoachEnabled by viewModel.poseCoachEnabled.collectAsState()
         val generatedPlan by viewModel.generatedWorkoutPlan.collectAsState()
         val isGeneratingPlan by viewModel.isGeneratingPlan.collectAsState()
         val recentSessions by viewModel.recentSessions.collectAsState()
@@ -330,13 +333,10 @@ class MainActivity : ComponentActivity() {
             hasCameraPermission = hasCameraPerm,
             useFrontCamera = useFrontCamera,
             dualStreamAnalyzer = viewModel.dualStreamAnalyzer,
-            poseFrame = poseFrame,
             workoutState = workoutState,
-            poseCoachEnabled = poseCoachEnabled,
             generatedPlan = generatedPlan,
             isGeneratingPlan = isGeneratingPlan,
             recentSessions = recentSessions,
-            onTogglePoseCoach = { viewModel.setPoseCoachEnabled(!poseCoachEnabled) },
             onSelectExercise = { exercise -> viewModel.selectExercise(exercise) },
             onGenerateWorkoutPlan = { goal, exp, equip, duration ->
                 viewModel.generateAiWorkoutPlan(goal, exp, equip, duration)

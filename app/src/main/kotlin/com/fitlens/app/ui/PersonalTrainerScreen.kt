@@ -1,6 +1,16 @@
 package com.fitlens.app.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -19,11 +29,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Mic
@@ -39,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -58,32 +71,31 @@ import com.fitlens.app.ai.live.MoodSpeculation
 import com.fitlens.app.ai.live.MoodSpeculator
 import com.fitlens.app.camera.CameraPreviewView
 import com.fitlens.app.camera.DualStreamAnalyzer
-import com.fitlens.app.camera.SkeletonOverlay
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserProfile
-import com.fitlens.app.pose.PoseAnalysisFrame
 import com.fitlens.app.vitals.VitalsReading
 import com.fitlens.app.workout.WorkoutPhase
 import com.fitlens.app.workout.WorkoutState
 import com.presagetech.smartspectra.ProcessingStatus
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-// Cohesive Modern Obsidian + Athletic Lime / Emerald Palette
-private val BG_OBSIDIAN = Color(0xFF09090B)
-private val SURFACE_CARD = Color(0xFF121216)
-private val SURFACE_ELEVATED = Color(0xFF1A1A20)
-private val BORDER_ZINC = Color(0xFF27272A)
-private val ACCENT_LIME = Color(0xFFA3E635)
-private val ACCENT_EMERALD = Color(0xFF10B981)
-private val ACCENT_ROSE = Color(0xFFF43F5E)
-private val ACCENT_SKY = Color(0xFF38BDF8)
-private val ACCENT_AMBER = Color(0xFFFBBF24)
-private val TEXT_PRIMARY = Color(0xFFFAFAFA)
-private val TEXT_SECONDARY = Color(0xFFA1A1AA)
-private val TEXT_MUTED = Color(0xFF71717A)
+// Cohesive Modern Obsidian + Athletic Lime / Emerald Palette (FitLensPalette)
+private val BG_OBSIDIAN = FitLensPalette.Obsidian
+private val SURFACE_CARD = FitLensPalette.Card
+private val SURFACE_ELEVATED = FitLensPalette.Elevated
+private val BORDER_ZINC = FitLensPalette.Border
+private val ACCENT_LIME = FitLensPalette.Lime
+private val ACCENT_EMERALD = FitLensPalette.Emerald
+private val ACCENT_ROSE = FitLensPalette.Rose
+private val ACCENT_SKY = FitLensPalette.Sky
+private val ACCENT_AMBER = FitLensPalette.Amber
+private val TEXT_PRIMARY = FitLensPalette.White
+private val TEXT_SECONDARY = FitLensPalette.Zinc
+private val TEXT_MUTED = FitLensPalette.ZincMuted
 
 private enum class FitLensTab(val label: String) {
     TRAIN("Train"),
@@ -104,13 +116,10 @@ fun PersonalTrainerScreen(
     hasCameraPermission: Boolean,
     useFrontCamera: Boolean,
     dualStreamAnalyzer: DualStreamAnalyzer,
-    poseFrame: PoseAnalysisFrame?,
     workoutState: WorkoutState,
-    poseCoachEnabled: Boolean,
     generatedPlan: WorkoutPlanResult,
     isGeneratingPlan: Boolean,
     recentSessions: List<WorkoutSessionEntity>,
-    onTogglePoseCoach: () -> Unit,
     onSelectExercise: (String) -> Unit,
     onGenerateWorkoutPlan: (String, String, String, Int) -> Unit,
     onStartGeneratedRoutine: (WorkoutPlanResult) -> Unit,
@@ -141,7 +150,11 @@ fun PersonalTrainerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(BG_OBSIDIAN)
+            .background(
+                Brush.verticalGradient(
+                    listOf(BG_OBSIDIAN, Color(0xFF0D0D12), BG_OBSIDIAN)
+                )
+            )
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
@@ -185,18 +198,6 @@ fun PersonalTrainerScreen(
                             .fillMaxSize()
                             .clip(RoundedCornerShape(16.dp))
                     )
-                    if (poseCoachEnabled && cameraDisplayMode != CameraFeedDisplayMode.HIDDEN) {
-                        poseFrame?.let { pf ->
-                            SkeletonOverlay(
-                                landmarks = pf.landmarks,
-                                hasActiveDeviation = pf.activeDeviations.isNotEmpty(),
-                                modifier = Modifier.fillMaxSize(),
-                                frameWidth = pf.frameWidth,
-                                frameHeight = pf.frameHeight,
-                                activeDeviations = pf.activeDeviations
-                            )
-                        }
-                    }
                     if (cameraDisplayMode != CameraFeedDisplayMode.HIDDEN) {
                         Row(
                             modifier = Modifier
@@ -270,15 +271,24 @@ fun PersonalTrainerScreen(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                when (activeTab) {
+                AnimatedContent(
+                    targetState = activeTab,
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                        (slideInHorizontally(tween(280)) { it / 12 * direction } + fadeIn(tween(220)))
+                            .togetherWith(
+                                slideOutHorizontally(tween(280)) { -it / 12 * direction } + fadeOut(tween(180))
+                            )
+                    },
+                    label = "tabTransition"
+                ) { tab ->
+                when (tab) {
                     FitLensTab.TRAIN -> TrainTabContent(
                         workoutState = workoutState,
-                        poseCoachEnabled = poseCoachEnabled,
                         generatedPlan = generatedPlan,
                         isGeneratingPlan = isGeneratingPlan,
                         showCustomizePlan = showCustomizePlan,
                         onToggleCustomizePlan = { showCustomizePlan = !showCustomizePlan },
-                        onTogglePoseCoach = onTogglePoseCoach,
                         onSelectExercise = onSelectExercise,
                         onGenerateWorkoutPlan = onGenerateWorkoutPlan,
                         onStartGeneratedRoutine = onStartGeneratedRoutine,
@@ -308,6 +318,7 @@ fun PersonalTrainerScreen(
                         onClearChat = onClearChat,
                         onClearError = onClearError
                     )
+                }
                 }
             }
 
@@ -367,6 +378,12 @@ private fun MinimalTopBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            Icon(
+                imageVector = Icons.Filled.FitnessCenter,
+                contentDescription = null,
+                tint = ACCENT_LIME,
+                modifier = Modifier.size(24.dp)
+            )
             Text(
                 text = "FitLens",
                 color = TEXT_PRIMARY,
@@ -389,12 +406,7 @@ private fun MinimalTopBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(if (isSensingRunning) ACCENT_EMERALD else TEXT_MUTED)
-                    )
+                    SensingStatusDot(isSensingRunning = isSensingRunning)
                     Text(
                         text = if (isSensingRunning) {
                             if (vitals.heartRateBpm > 0) "${vitals.heartRateBpm.roundToInt()} BPM" else "Calibrating"
@@ -463,6 +475,30 @@ private fun MinimalTopBar(
     }
 }
 
+/** Pulsing status dot: breathes gently while sensing is live. */
+@Composable
+private fun SensingStatusDot(isSensingRunning: Boolean) {
+    val transition = rememberInfiniteTransition(label = "sensingDot")
+    val dotAlpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "sensingDotAlpha"
+    )
+    Box(
+        modifier = Modifier
+            .size(7.dp)
+            .clip(CircleShape)
+            .background(
+                if (isSensingRunning) ACCENT_EMERALD.copy(alpha = dotAlpha)
+                else TEXT_MUTED.copy(alpha = 0.6f)
+            )
+    )
+}
+
 @Composable
 private fun PermissionPromptCard(
     hasConsent: Boolean,
@@ -520,12 +556,10 @@ private fun PermissionPromptCard(
 @Composable
 private fun TrainTabContent(
     workoutState: WorkoutState,
-    poseCoachEnabled: Boolean,
     generatedPlan: WorkoutPlanResult,
     isGeneratingPlan: Boolean,
     showCustomizePlan: Boolean,
     onToggleCustomizePlan: () -> Unit,
-    onTogglePoseCoach: () -> Unit,
     onSelectExercise: (String) -> Unit,
     onGenerateWorkoutPlan: (String, String, String, Int) -> Unit,
     onStartGeneratedRoutine: (WorkoutPlanResult) -> Unit,
@@ -542,6 +576,7 @@ private fun TrainTabContent(
     var selectedLevel by remember { mutableStateOf("Intermediate") }
     var selectedEquipment by remember { mutableStateOf("Bodyweight") }
     var selectedDuration by remember { mutableStateOf(15) }
+    var detailExercise by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -553,12 +588,10 @@ private fun TrainTabContent(
         if (isWorkoutActive) {
             ActiveWorkoutPlayerSection(
                 workoutState = workoutState,
-                poseCoachEnabled = poseCoachEnabled,
                 onIncrementRep = onIncrementRep,
                 onCompleteSet = onCompleteSet,
                 onSkipPhase = onSkipPhase,
-                onStopWorkout = onStopWorkout,
-                onTogglePoseCoach = onTogglePoseCoach
+                onStopWorkout = onStopWorkout
             )
         } else {
             // 1. Programs Horizontal Strip
@@ -598,30 +631,69 @@ private fun TrainTabContent(
                                 if (isSelected) ACCENT_LIME else BORDER_ZINC
                             )
                         ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = program.badge,
-                                    color = if (isSelected) ACCENT_LIME else TEXT_MUTED,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = program.title,
-                                    color = TEXT_PRIMARY,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = program.subtitle,
-                                    color = TEXT_SECONDARY,
-                                    fontSize = 11.sp,
-                                    maxLines = 1
-                                )
+                            Column {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(72.dp)
+                                        .clip(
+                                            RoundedCornerShape(
+                                                topStart = 16.dp,
+                                                topEnd = 16.dp
+                                            )
+                                        )
+                                ) {
+                                    ProgramArtwork(
+                                        accentColor = Color(program.accentHex),
+                                        goalKey = program.goalKey,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    if (isSelected) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = ACCENT_LIME,
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "ACTIVE",
+                                                color = Color.Black,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                modifier = Modifier.padding(
+                                                    horizontal = 6.dp,
+                                                    vertical = 3.dp
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = program.badge,
+                                        color = if (isSelected) ACCENT_LIME else TEXT_MUTED,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = program.title,
+                                        color = TEXT_PRIMARY,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = program.subtitle,
+                                        color = TEXT_SECONDARY,
+                                        fontSize = 11.sp,
+                                        maxLines = 1
+                                    )
+                                }
                             }
                         }
                     }
@@ -758,6 +830,7 @@ private fun TrainTabContent(
                                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                                         modifier = Modifier.weight(1f)
                                     ) {
+                                        ExerciseGlyphBadge(exerciseName = exercise)
                                         Text(
                                             text = "${index + 1}",
                                             color = ACCENT_LIME,
@@ -773,6 +846,14 @@ private fun TrainTabContent(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = "Exercise details",
+                                        tint = TEXT_MUTED,
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clickable { detailExercise = exercise }
+                                    )
                                     Text(
                                         text = if (isHold) "3 × 30s" else "3 × 12",
                                         color = TEXT_SECONDARY,
@@ -848,6 +929,102 @@ private fun TrainTabContent(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+            }
+        }
+    }
+
+    detailExercise?.let { name ->
+        ExerciseDetailSheet(exerciseName = name, onDismiss = { detailExercise = null })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExerciseDetailSheet(
+    exerciseName: String,
+    onDismiss: () -> Unit
+) {
+    val meta = getExerciseCoachingMeta(exerciseName)
+    val isHold = exerciseName.contains("Plank", ignoreCase = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = SURFACE_CARD
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ExerciseGlyphBadge(exerciseName = exerciseName, modifier = Modifier.size(48.dp))
+                Column {
+                    Text(
+                        text = "EXERCISE",
+                        color = TEXT_MUTED,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = exerciseName,
+                        color = TEXT_PRIMARY,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = SURFACE_ELEVATED
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("TARGET", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text(meta.targetMuscles, color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("TEMPO", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text(meta.tempoCue, color = ACCENT_LIME, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("SETS × REPS", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isHold) "3 × 30s" else "3 × 12", color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            Text(
+                text = "FORM CHECKLIST",
+                color = TEXT_MUTED,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            meta.formChecklist.forEach { cue ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = ACCENT_EMERALD,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(cue, color = TEXT_SECONDARY, fontSize = 13.sp)
                 }
             }
         }
@@ -1121,7 +1298,10 @@ private fun VitalsTabContent(
             }
         }
 
-        // 4. Recent Workouts (compact 1-line rows)
+        // 4. Weekly Activity + Recent Workouts
+        if (recentSessions.isNotEmpty()) {
+            WeeklyActivityCard(sessions = recentSessions)
+        }
         if (recentSessions.isNotEmpty()) {
             val fmt = remember { SimpleDateFormat("MMM d • HH:mm", Locale.getDefault()) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1141,10 +1321,14 @@ private fun VitalsTabContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            ExerciseGlyphBadge(
+                                exerciseName = session.exerciseName,
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = session.exerciseName,
                                     color = TEXT_PRIMARY,
@@ -1164,6 +1348,111 @@ private fun VitalsTabContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 7-day training activity bar chart built from local session history. */
+@Composable
+private fun WeeklyActivityCard(sessions: List<WorkoutSessionEntity>) {
+    val dayMillis = 24L * 60 * 60 * 1000
+    val (counts, repTotals, dayLetters) = remember(sessions) {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val todayStart = cal.timeInMillis
+        val counts = IntArray(7)
+        val reps = IntArray(7)
+        sessions.forEach { s ->
+            val dayIndex = ((todayStart - s.timestamp) / dayMillis).toInt()
+            val bucket = 6 - dayIndex
+            if (bucket in 0..6 && dayIndex >= 0) {
+                counts[bucket]++
+                reps[bucket] += s.completedReps
+            }
+        }
+        val letters = CharArray(7) { 'M' }
+        // Labels: oldest -> today
+        val sdf = SimpleDateFormat("EEEEE", Locale.getDefault())
+        for (i in 0 until 7) {
+            cal.timeInMillis = todayStart - (6 - i) * dayMillis
+            letters[i] = sdf.format(cal.time).take(1).uppercaseChar()
+        }
+        Triple(counts, reps, letters)
+    }
+    val maxCount = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val weekReps = repTotals.sum()
+    val weekSessions = counts.sum()
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = SURFACE_CARD,
+        border = BorderStroke(1.dp, BORDER_ZINC)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "THIS WEEK",
+                    color = ACCENT_LIME,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    text = "$weekSessions session${if (weekSessions == 1) "" else "s"} • $weekReps reps",
+                    color = TEXT_SECONDARY,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom
+            ) {
+                counts.forEachIndexed { i, count ->
+                    val isToday = i == 6
+                    val fraction = count.toFloat() / maxCount
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(0.55f)
+                                .height(6.dp + 52.dp * fraction)
+                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                .background(
+                                    when {
+                                        count == 0 -> SURFACE_ELEVATED
+                                        isToday -> ACCENT_LIME
+                                        else -> ACCENT_LIME.copy(alpha = 0.45f)
+                                    }
+                                )
+                        )
+                        Text(
+                            text = dayLetters[i].toString(),
+                            color = if (isToday) ACCENT_LIME else TEXT_MUTED,
+                            fontSize = 10.sp,
+                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Medium
+                        )
                     }
                 }
             }
@@ -1607,14 +1896,10 @@ private fun BottomVitalsAndNavBar(
                 }
             }
 
-            // Clean 3-Tab Segmented Switcher
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(BG_OBSIDIAN)
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            // Material 3 Navigation Bar with animated selection indicator
+            NavigationBar(
+                containerColor = SURFACE_CARD,
+                tonalElevation = 0.dp
             ) {
                 FitLensTab.entries.forEach { tab ->
                     val selected = tab == activeTab
@@ -1623,33 +1908,24 @@ private fun BottomVitalsAndNavBar(
                         FitLensTab.VITALS -> Icons.Default.Favorite
                         FitLensTab.COACH -> Icons.AutoMirrored.Filled.Chat
                     }
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onSelectTab(tab) },
-                        shape = RoundedCornerShape(9.dp),
-                        color = if (selected) SURFACE_ELEVATED else Color.Transparent
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    NavigationBarItem(
+                        selected = selected,
+                        onClick = { onSelectTab(tab) },
+                        icon = {
                             Icon(
                                 imageVector = icon,
-                                contentDescription = tab.label,
-                                tint = if (selected) ACCENT_LIME else TEXT_MUTED,
-                                modifier = Modifier.size(16.dp)
+                                contentDescription = tab.label
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = tab.label,
-                                color = if (selected) TEXT_PRIMARY else TEXT_MUTED,
-                                fontSize = 13.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
-                    }
+                        },
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = ACCENT_LIME,
+                            selectedTextColor = TEXT_PRIMARY,
+                            indicatorColor = ACCENT_LIME.copy(alpha = 0.14f),
+                            unselectedIconColor = TEXT_MUTED,
+                            unselectedTextColor = TEXT_MUTED
+                        )
+                    )
                 }
             }
         }

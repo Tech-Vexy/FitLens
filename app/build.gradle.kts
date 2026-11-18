@@ -156,8 +156,6 @@ dependencies {
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
     implementation("com.presagetech:smartspectra:3.4.0")
 
-    // MediaPipe Pose Estimation
-    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
     // Firebase AI Logic & App Check (Zero AI Key Protection)
     implementation(platform("com.google.firebase:firebase-bom:35.1.0"))

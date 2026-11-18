@@ -5,9 +5,6 @@ import com.fitlens.app.ai.FitnessTools
 import com.fitlens.app.ai.adk.AdkAuthMode
 import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserProfile
-import com.fitlens.app.pose.DeviationSeverity
-import com.fitlens.app.pose.LandmarkPoint
-import com.fitlens.app.pose.PoseLandmarkManager
 import com.fitlens.app.vitals.HeartRateZone
 import com.fitlens.app.vitals.PresageFrameAnalyzer
 import com.fitlens.app.workout.ProgressAnalyzer
@@ -91,92 +88,6 @@ class FitnessCoachTest {
             targetReps = 10
         )
         assertFalse(cleanCheck.shouldHaltSet)
-    }
-
-    @Test
-    fun testPoseAngleCalculation() {
-        val manager = PoseLandmarkManager()
-
-        val a = LandmarkPoint(0f, 1f, 0f)
-        val b = LandmarkPoint(0f, 0f, 0f)
-        val c = LandmarkPoint(1f, 0f, 0f)
-
-        val angle = manager.calculateAngle(a, b, c)
-        assertEquals(90.0, angle, 0.5)
-
-        val d = LandmarkPoint(0f, -1f, 0f)
-        val straightAngle = manager.calculateAngle(a, b, d)
-        assertEquals(180.0, straightAngle, 0.5)
-    }
-
-    @Test
-    fun testKneeValgusDetection() {
-        val manager = PoseLandmarkManager()
-        manager.setExercise("Squats")
-
-        val valgusLandmarks = mapOf(
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.40f, 0.50f, 0f),
-            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.48f, 0.70f, 0f),
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.35f, 0.80f, 0f),
-            PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.60f, 0.50f, 0f),
-            PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.52f, 0.70f, 0f),
-            PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.65f, 0.80f, 0f)
-        )
-
-        val frame = manager.analyzeLandmarks(valgusLandmarks)
-        val valgusDeviations = frame.activeDeviations.filter { it.jointName == "Knees" }
-        assertEquals(1, valgusDeviations.size)
-        assertEquals(DeviationSeverity.CRITICAL, valgusDeviations.first().severity)
-    }
-
-    @Test
-    fun testPlankSaggingAndPikingDetection() {
-        val manager = PoseLandmarkManager()
-        manager.setExercise("Plank")
-
-        // Hips sagging below shoulder-ankle midpoint: CRITICAL
-        val saggingPlankLandmarks = mapOf(
-            PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.20f, 0.40f, 0f),
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.65f, 0f),
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.85f, 0.45f, 0f)
-        )
-
-        val sagFrame = manager.analyzeLandmarks(saggingPlankLandmarks)
-        val hipDeviations = sagFrame.activeDeviations.filter { it.jointName == "Hips" }
-        assertEquals(1, hipDeviations.size)
-        assertEquals(DeviationSeverity.CRITICAL, hipDeviations.first().severity)
-        assertTrue(hipDeviations.first().message.contains("Hips sagging"))
-
-        // Hips piked high above shoulder-ankle midpoint: WARNING
-        val pikedPlankLandmarks = mapOf(
-            PoseLandmarkManager.LEFT_SHOULDER to LandmarkPoint(0.20f, 0.55f, 0f),
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.50f, 0.28f, 0f),
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.85f, 0.55f, 0f)
-        )
-        val pikeFrame = manager.analyzeLandmarks(pikedPlankLandmarks)
-        val pikeDeviations = pikeFrame.activeDeviations.filter { it.jointName == "Hips" }
-        assertEquals(1, pikeDeviations.size)
-        assertEquals(DeviationSeverity.WARNING, pikeDeviations.first().severity)
-        assertTrue(pikeDeviations.first().message.contains("piked"))
-    }
-
-    @Test
-    fun testLungeExcessiveFlexionDetection() {
-        val manager = PoseLandmarkManager()
-        manager.setExercise("Lunges")
-
-        val deepLungeLandmarks = mapOf(
-            PoseLandmarkManager.LEFT_HIP to LandmarkPoint(0.30f, 0.55f, 0f),
-            PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.55f, 0.55f, 0f),
-            PoseLandmarkManager.LEFT_ANKLE to LandmarkPoint(0.45f, 0.75f, 0f),
-            PoseLandmarkManager.RIGHT_HIP to LandmarkPoint(0.60f, 0.40f, 0f),
-            PoseLandmarkManager.RIGHT_KNEE to LandmarkPoint(0.70f, 0.80f, 0f),
-            PoseLandmarkManager.RIGHT_ANKLE to LandmarkPoint(0.85f, 0.90f, 0f)
-        )
-
-        val frame = manager.analyzeLandmarks(deepLungeLandmarks)
-        assertNotNull(frame)
-        assertTrue(frame.currentAngle < 100.0)
     }
 
     @Test
@@ -506,49 +417,6 @@ class FitnessCoachTest {
     // ------------------------------------------------------------------
     // New Upgrades: Camera Rotation/Mirroring, EMA Smoothing, Biofeedback & Routines
     // ------------------------------------------------------------------
-
-    @Test
-    fun testSensorRotationAndFrontCameraMirroring() {
-        // 4x2 sensor image rotated 270 deg CW -> upright 2x4 output
-        // Without mirror: upright top-left (0, 0) comes from sensor top-right (3, 0)
-        val unmirrored270 = PoseLandmarkManager.mapOutputToSensorCoords(
-            ox = 0, oy = 0, outW = 2, outH = 4, stride = 1,
-            srcW = 4, srcH = 2, rotationDegrees = 270, mirrorHorizontally = false
-        )
-        assertEquals(3 to 0, unmirrored270)
-
-        // With front-camera mirror: upright top-left (ox=0 -> unmirrored ox=1, oy=0) comes from (3, 1)
-        val mirrored270 = PoseLandmarkManager.mapOutputToSensorCoords(
-            ox = 0, oy = 0, outW = 2, outH = 4, stride = 1,
-            srcW = 4, srcH = 2, rotationDegrees = 270, mirrorHorizontally = true
-        )
-        assertEquals(3 to 1, mirrored270)
-
-        // 90 deg CW without mirror: upright top-right (ox=1, oy=0) comes from sensor top-left (0, 0)
-        val unmirrored90 = PoseLandmarkManager.mapOutputToSensorCoords(
-            ox = 1, oy = 0, outW = 2, outH = 4, stride = 1,
-            srcW = 4, srcH = 2, rotationDegrees = 90, mirrorHorizontally = false
-        )
-        assertEquals(0 to 0, unmirrored90)
-    }
-
-    @Test
-    fun testLandmarkTemporalSmoothing() {
-        val manager = PoseLandmarkManager()
-        val first = mapOf(PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.20f, 0.50f, 0f))
-        val second = mapOf(PoseLandmarkManager.LEFT_KNEE to LandmarkPoint(0.60f, 0.50f, 0f))
-
-        val s1 = manager.smoothLandmarks(first, alpha = 0.5f)
-        assertEquals(0.20f, s1[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
-
-        val s2 = manager.smoothLandmarks(second, alpha = 0.5f)
-        assertEquals(0.40f, s2[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
-
-        // Empty landmarks reset temporal smoothing buffer cleanly
-        assertTrue(manager.smoothLandmarks(emptyMap()).isEmpty())
-        val afterReset = manager.smoothLandmarks(second, alpha = 0.5f)
-        assertEquals(0.60f, afterReset[PoseLandmarkManager.LEFT_KNEE]!!.x, 0.001f)
-    }
 
     @Test
     fun testHolisticMultiSignalBiofeedbackTool() {
