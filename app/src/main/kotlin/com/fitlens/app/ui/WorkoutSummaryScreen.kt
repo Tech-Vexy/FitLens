@@ -3,17 +3,21 @@ package com.fitlens.app.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -22,6 +26,7 @@ import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.workout.WorkoutState
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 /**
  * Post-workout summary screen that displays session statistics, physiological trends,
@@ -127,7 +132,7 @@ private fun SessionOverviewCard(session: WorkoutSessionEntity, fmt: SimpleDateFo
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = FitLensPalette.Card,
-        border = androidx.compose.foundation.border(1.dp, FitLensPalette.Border)
+        border = BorderStroke(1.dp, FitLensPalette.Border)
     ) {
         Column(
             modifier = Modifier
@@ -204,7 +209,7 @@ private fun PhysiologicalTrendsCard(session: WorkoutSessionEntity) {
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = FitLensPalette.Card,
-        border = androidx.compose.foundation.border(1.dp, FitLensPalette.Border)
+        border = BorderStroke(1.dp, FitLensPalette.Border)
     ) {
         Column(
             modifier = Modifier
@@ -311,7 +316,7 @@ private fun AiCoachingCard(session: WorkoutSessionEntity) {
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = FitLensPalette.Card,
-            border = androidx.compose.foundation.border(1.dp, FitLensPalette.Border)
+            border = BorderStroke(1.dp, FitLensPalette.Border)
         ) {
             Column(
                 modifier = Modifier
@@ -396,7 +401,7 @@ private fun RecentSessionsList(
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = FitLensPalette.Card,
-                border = androidx.compose.foundation.border(1.dp, FitLensPalette.Border)
+                border = BorderStroke(1.dp, FitLensPalette.Border)
             ) {
                 Row(
                     modifier = Modifier

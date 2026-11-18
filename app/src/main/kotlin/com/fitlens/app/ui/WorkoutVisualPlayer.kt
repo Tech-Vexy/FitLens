@@ -43,7 +43,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.hapticfeedback.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -465,6 +465,7 @@ fun ActiveWorkoutPlayerSection(
     val totalRoutineCount = maxOf(1, workoutState.routineExercises.size)
     val currentExerciseNum = workoutState.currentExerciseIndex + 1
 
+    val criticalDeviation = workoutState.activeCoachAlert
     val coachBannerText = aiCoachingPrompt
         ?: workoutState.activeCoachAlert
         ?: getExerciseCoachingMeta(workoutState.exerciseName).formChecklist.firstOrNull()

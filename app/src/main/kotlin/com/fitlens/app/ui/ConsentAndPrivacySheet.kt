@@ -330,7 +330,7 @@ fun ProfileAndPrivacySheet(
                         Text(
                             text = res.message,
                             fontSize = 11.sp,
-                            color = if (res.presageGatePassed && res.mediaPipeGatePassed) SHEET_EMERALD else SHEET_ROSE
+                            color = if (res.presageGatePassed) SHEET_EMERALD else SHEET_ROSE
                         )
                     }
 

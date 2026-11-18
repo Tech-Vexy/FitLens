@@ -152,6 +152,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    // Provides com.google.common.util.concurrent.ListenableFuture used by CameraX APIs
+    implementation("androidx.concurrent:concurrent-futures:1.3.0")
 
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
     implementation("com.presagetech:smartspectra:3.4.0")

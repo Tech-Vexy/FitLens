@@ -90,7 +90,7 @@ class FitnessCoachAgent(
     /**
      * Executes post-workout session evaluation strictly locally (zero cloud vitals transmission).
      */
-    suspend fun evaluateSession(
+    fun evaluateSession(
         durationSeconds: Int,
         avgHrBpm: Double,
         formDeviations: Int

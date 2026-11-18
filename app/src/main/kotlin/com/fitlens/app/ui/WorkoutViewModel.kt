@@ -571,7 +571,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun prepareVitalsCustomInput() {
+    suspend fun prepareVitalsCustomInput() {
         vitalsAnalyzer.ensureCustomInput()
     }
 

@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -287,6 +288,7 @@ fun PersonalTrainerScreen(
                     FitLensTab.TRAIN -> TrainTabContent(
                         workoutState = workoutState,
                         generatedPlan = generatedPlan,
+                        aiCoachingPrompt = aiCoachingPrompt,
                         isGeneratingPlan = isGeneratingPlan,
                         showCustomizePlan = showCustomizePlan,
                         recentSessions = recentSessions,
@@ -559,6 +561,7 @@ private fun PermissionPromptCard(
 private fun TrainTabContent(
     workoutState: WorkoutState,
     generatedPlan: WorkoutPlanResult,
+    aiCoachingPrompt: String?,
     isGeneratingPlan: Boolean,
     showCustomizePlan: Boolean,
     recentSessions: List<WorkoutSessionEntity>,
@@ -949,6 +952,7 @@ private fun TrainTabContent(
     detailExercise?.let { name ->
         ExerciseDetailSheet(exerciseName = name, onDismiss = { detailExercise = null })
     }
+}
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1365,8 +1369,6 @@ private fun VitalsTabContent(
             }
         }
     }
-    // Close the else block for isWorkoutCompleted
-    }
 }
 
 /** 7-day training activity bar chart built from local session history. */
@@ -1396,7 +1398,7 @@ private fun WeeklyActivityCard(sessions: List<WorkoutSessionEntity>) {
         val sdf = SimpleDateFormat("EEEEE", Locale.getDefault())
         for (i in 0 until 7) {
             cal.timeInMillis = todayStart - (6 - i) * dayMillis
-            letters[i] = sdf.format(cal.time).take(1).uppercaseChar()
+            letters[i] = sdf.format(cal.time).first().uppercaseChar()
         }
         Triple(counts, reps, letters)
     }
@@ -1954,25 +1956,27 @@ private fun CompactVitalStat(
     color: Color
 ) {
     Row(
-        verticalAlignment = Alignment.Baseline,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = label,
             color = color,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.alignByBaseline()
         )
         Text(
             text = value,
             color = TEXT_PRIMARY,
             fontSize = 17.sp,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.alignByBaseline()
         )
         Text(
             text = unit,
             color = TEXT_MUTED,
-            fontSize = 10.sp
+            fontSize = 10.sp,
+            modifier = Modifier.alignByBaseline()
         )
     }
 }
