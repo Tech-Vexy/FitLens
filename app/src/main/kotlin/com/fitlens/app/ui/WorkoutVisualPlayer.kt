@@ -455,6 +455,7 @@ fun AnimatedExerciseIllustration(
 @Composable
 fun ActiveWorkoutPlayerSection(
     workoutState: WorkoutState,
+    aiCoachingPrompt: String?,
     onIncrementRep: () -> Unit,
     onCompleteSet: () -> Unit,
     onSkipPhase: () -> Unit,
@@ -464,7 +465,8 @@ fun ActiveWorkoutPlayerSection(
     val totalRoutineCount = maxOf(1, workoutState.routineExercises.size)
     val currentExerciseNum = workoutState.currentExerciseIndex + 1
 
-    val coachBannerText = workoutState.activeCoachAlert
+    val coachBannerText = aiCoachingPrompt
+        ?: workoutState.activeCoachAlert
         ?: getExerciseCoachingMeta(workoutState.exerciseName).formChecklist.firstOrNull()
         ?: "Steady cadence"
 

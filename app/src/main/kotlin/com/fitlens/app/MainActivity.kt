@@ -235,6 +235,7 @@ class MainActivity : ComponentActivity() {
         val profile by viewModel.userProfile.collectAsState()
         val assistantState by viewModel.assistantState.collectAsState()
         val moodSpeculation by viewModel.moodSpeculation.collectAsState()
+        val aiCoachingPrompt by viewModel.aiCoachingPrompt.collectAsState()
         val workoutState by viewModel.workoutState.collectAsState()
         val generatedPlan by viewModel.generatedWorkoutPlan.collectAsState()
         val isGeneratingPlan by viewModel.isGeneratingPlan.collectAsState()
@@ -326,6 +327,7 @@ class MainActivity : ComponentActivity() {
             profile = profile,
             assistantState = assistantState,
             moodSpeculation = moodSpeculation,
+            aiCoachingPrompt = aiCoachingPrompt,
             processingStatus = effectiveProcessingStatus,
             validationHint = validationStatus?.hint,
             sdkErrorMessage = if (isSensingActive) null else sdkError?.message,

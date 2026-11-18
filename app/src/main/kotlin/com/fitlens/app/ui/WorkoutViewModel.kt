@@ -90,6 +90,9 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _moodSpeculation = MutableStateFlow(MoodSpeculator.speculate(vitalsAnalyzer.vitalsFlow.value))
     val moodSpeculation: StateFlow<MoodSpeculation> = _moodSpeculation.asStateFlow()
 
+    private val _aiCoachingPrompt = MutableStateFlow<String?>(null)
+    val aiCoachingPrompt: StateFlow<String?> = _aiCoachingPrompt.asStateFlow()
+
     private val _userProfile = MutableStateFlow(UserProfile())
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
@@ -104,6 +107,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     @Volatile private var sensingStartedAtMs = 0L
     @Volatile private var lastWorkoutPhase: WorkoutPhase? = null
     @Volatile private var completionSessionSaved = false
+    @Volatile private var lastAiCoachingAtMs = 0L
+    private val AI_COACHING_INTERVAL_MS = 15_000L
 
     val dualStreamAnalyzer = DualStreamAnalyzer(
         presageAnalyzer = vitalsAnalyzer,
@@ -313,6 +318,16 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     lastBiometricSyncAtMs = now
                     liveAssistant.sendBiometricContext(buildCurrentBiometricContext(trendNote))
                 }
+
+                // AI coaching: periodically evaluate holistic biofeedback during active workout
+                if (workoutPhase != WorkoutPhase.IDLE &&
+                    workoutPhase != WorkoutPhase.COMPLETED &&
+                    vitals.heartRateBpm > 35.0 &&
+                    now - lastAiCoachingAtMs >= AI_COACHING_INTERVAL_MS
+                ) {
+                    lastAiCoachingAtMs = now
+                    evaluateAiCoaching(vitals, workoutPhase)
+                }
             }
         }
 
@@ -378,6 +393,37 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 Log.w(TAG, "Failed to persist workout session: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Evaluates holistic biofeedback from live vitals and produces an AI coaching prompt.
+     * Called periodically during active workout phases.
+     */
+    private fun evaluateAiCoaching(vitals: com.fitlens.app.vitals.VitalsReading, phase: WorkoutPhase) {
+        val result = coachAgent.evaluateBiofeedback(
+            heartRateBpm = vitals.heartRateBpm,
+            breathingRateBpm = vitals.breathingRateBpm,
+            hrvRmssdMs = vitals.heartRateVariabilityMs,
+            facialExpression = vitals.facialExpression ?: "Neutral"
+        )
+
+        val workout = workoutManager.state.value
+        val context = buildString {
+            append("Phase: ${phase.name}, Exercise: ${workout.exerciseName}, Set: ${workout.currentSet}")
+        }
+
+        val prompt = buildString {
+            if (result.shouldTriggerBreathingPacer) {
+                append("Your breathing is elevated — try the breathing pacer: ${result.breathingDirective}. ")
+            }
+            if (result.expressionCue != null) {
+                append(result.expressionCue).append(" ")
+            }
+            append("Readiness: ${result.autonomicReadinessLabel}.")
+        }
+
+        _aiCoachingPrompt.value = prompt.trim()
+        Log.i(TAG, "AI Coaching [$context]: $prompt")
     }
 
 

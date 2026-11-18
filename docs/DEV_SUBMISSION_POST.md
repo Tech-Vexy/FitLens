@@ -2,13 +2,13 @@
 
 ## What I Built
 
-**FitLens** is a contactless, real-time Android fitness and biomechanics coach that turns an ordinary phone camera into a physiological and movement-aware training partner—no smartwatch, chest strap, or cloud health account required.
+**FitLens** is a contactless, real-time Android fitness coach that turns an ordinary phone camera into a physiological-aware training partner—no smartwatch, chest strap, or cloud health account required.
 
-Standard workout apps operate on blind, static timers: they count down a fixed 45-second rest whether your heart is still pounding at 172 BPM or calm at 98 BPM, and they keep counting reps even when fatigue causes your knees to cave inward. **FitLens closes the loop between external biomechanics and internal human physiology** by running **Presage SmartSpectra** and **MediaPipe 3D Pose Landmarker** concurrently on a single shared CameraX stream:
+Standard workout apps operate on blind, static timers: they count down a fixed 45-second rest whether your heart is still pounding at 172 BPM or calm at 98 BPM. **FitLens closes the loop between internal human physiology and AI coaching** by running **Presage SmartSpectra** for contactless vital signs and **Google ADK/Gemini** for adaptive coaching decisions:
 
-- **Vitals-Guided Workouts**: Counts dynamic reps (**Squats**, **Push-Ups**, **Lunges**) and timed isometric holds (**Plank**) with real-time joint-angle wireframes and hands-free TTS voice coaching.
+- **Vitals-Guided Workouts**: Counts dynamic reps (**Squats**, **Push-Ups**, **Lunges**) and timed isometric holds (**Plank**) with hands-free TTS voice coaching and live physiological feedback.
 - **Physiology-Driven Recovery**: Automatically extends rest intervals when pulse recovery lags, launches an **Animated Coherent Breathing Pacer** synced to your live respiratory rate, tracks **HRV (RMSSD)** readiness, and even coaches you to unclench your jaw when SmartSpectra detects **facial strain** mid-set.
-- **AI Periodization with Zero Client Keys & 100% Local Vault**: Generates tailored multi-exercise routines and 4-week mesocycles via an ADK Kotlin coach (with a 100% offline On-Device Edge mode), while keeping all biometric telemetry strictly on-device in local SQLite.
+- **AI Adaptive Coaching with Zero Client Keys & 100% Local Vault**: Generates tailored multi-exercise routines via an ADK Kotlin coach (with a 100% offline On-Device Edge mode), while keeping all biometric telemetry strictly on-device in local SQLite.
 
 ## Demo
 
@@ -17,8 +17,8 @@ Standard workout apps operate on blind, static timers: they count down a fixed 4
 > *Demo walkthrough highlights:*
 > 1. **Consent-First Activation**: Reviewing the in-app Camera & Biometric Sensing Consent gate (camera stays completely off prior to consent).
 > 2. **Live Vitals Dashboard**: Contactless SmartSpectra extraction of **Pulse BPM** (mapped to personalized Karvonen HR zones), **Breathing Rate (brpm)**, **HRV RMSSD (ms)**, **Facial Expression**, real-time **Arterial Pressure & Chest/Abdomen Waveforms**, framing validation hints, and on-demand **SmartSpectra Insights**.
-> 3. **ADK AI Routine & Live Dual-Stream Workout HUD**: Concurrent 33-point skeletal tracking + SmartSpectra rPPG without camera hardware contention, biomechanical valgus/sag intervention, **+30s Adaptive Vitals Rest Extension**, and the **4s-Inhale / 6s-Exhale Coherent Breathing Pacer** driven by live breathing rate.
-> 4. **Local Health Vault**: SQLite biomechanical telemetry breakdown, local JSON data export, and one-tap **Delete All Local Data**.
+> 3. **AI Coach & Live Workout HUD**: Real-time Presage vitals feed the AI coach, which adapts rest intervals and delivers voice coaching. **+30s Adaptive Vitals Rest Extension**, and the **4s-Inhale / 6s-Exhale Coherent Breathing Pacer** driven by live breathing rate.
+> 4. **Workout Summary**: Post-workout screen shows session duration, physiological trends (avg/peak HR, breathing rate), and AI-generated coaching recommendations. All data stored locally in SQLite with one-tap **Delete All Local Data**.
 
 ## Code
 
@@ -28,9 +28,9 @@ Standard workout apps operate on blind, static timers: they count down a fixed 4
 ## How It Responds to Human Signals
 
 ### Dual-Stream Headless Integration Without Camera Lock Contention
-Running two computer-vision SDKs on Android usually crashes with `CameraDevice` contention because both try to open the camera. FitLens solves this via [`DualStreamAnalyzer.kt`](https://github.com/Tech-Vexy/FitLens/blob/main/app/src/main/kotlin/com/fitlens/app/camera/DualStreamAnalyzer.kt) and [`PresageFrameAnalyzer.kt`](https://github.com/Tech-Vexy/FitLens/blob/main/app/src/main/kotlin/com/fitlens/app/vitals/PresageFrameAnalyzer.kt):
+FitLens streams camera frames to Presage SmartSpectra headlessly via [`PresageFrameAnalyzer.kt`](https://github.com/Tech-Vexy/FitLens/blob/main/app/src/main/kotlin/com/fitlens/app/vitals/PresageFrameAnalyzer.kt):
 1. `PresageManager` configures `SmartSpectraSdk.shared.config` with `SmartSpectraConfig.cardioMetrics`, `SmartSpectraConfig.breathingMetrics`, and `MetricType.EXPRESSIONS` (`imageOutputEnabled = false` since CameraX renders `PreviewView` directly).
-2. On each CameraX `YUV_420_888` `ImageProxy`, MediaPipe Pose (`RunningMode.VIDEO` with upright sensor-rotation/mirroring normalization and EMA smoothing) reads duplicated read-only plane buffers first, and then `PresageFrameAnalyzer` submits the untouched `ImageProxy` to a session-cached `SmartSpectraSdk.shared.useCustomInput()` handle (`input.sendFrame(imageProxy)`), closing the proxy in `finally` per the SDK contract.
+2. On each CameraX `YUV_420_888` `ImageProxy`, `PresageFrameAnalyzer` submits the frame to a session-cached `SmartSpectraSdk.shared.useCustomInput()` handle (`input.sendFrame(imageProxy)`), closing the proxy in `finally` per the SDK contract.
 3. `WorkoutViewModel` observes `sdk.metrics`, `sdk.validationStatus`, `sdk.insight`, and `sdk.error` LiveData streams reactively.
 
 ### Real-Time Multi-Signal Biofeedback Loops
@@ -56,16 +56,16 @@ Entering **both** prize categories (in addition to **Best Overall Human-Sensing 
 - **Who It's For & Usability Design**: Built for everyday athletes training with a propped-up phone—featuring hands-free Android TTS voice cues (rep counts, timed Plank milestones, urgent form warnings, adaptive rest announcements), front/rear camera switching, live SmartSpectra framing guidance, personalized Karvonen HRR sliders, and full offline operation.
 
 ### 2. Most Creative or Delightful Use
-- **What Makes It Original & Playful**: Pairing **facial expression biofeedback** ("jaw/brow strain release coaching" vs. "smiling through the burn!") with a **live respiratory-driven Coherent Breathing Pacer ring** and **3D glowing skeletal wireframe** creates an unexpectedly empathetic, reactive mirror—your coach notices when you're holding your breath or gritting your teeth mid-squat and responds in the moment.
+- **What Makes It Original & Playful**: Pairing **facial expression biofeedback** ("jaw/brow strain release coaching" vs. "smiling through the burn!") with a **live respiratory-driven Coherent Breathing Pacer ring** and **AI coach that adapts to your heart rate** creates an unexpectedly empathetic, reactive mirror—your coach notices when you're holding your breath or gritting your teeth mid-squat and responds in the moment.
 
 ## Consent and Data Handling
 
 FitLens is architected from the ground up around explicit consent, data minimization, and non-medical wellness boundaries:
 
 - **Explicit Camera & Sensing Consent**: Neither `CameraPreviewView` nor `SmartSpectraSdk.shared.start()` activates on launch. Users are first presented with an explicit **Camera & Biometric Sensing Consent** dialog (`SensingConsentDialog` in [`ConsentAndPrivacySheet.kt`](https://github.com/Tech-Vexy/FitLens/blob/main/app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt)) explaining what signals are measured and how data is handled, paired with Android's runtime `CAMERA` permission. Users can revoke consent at any time in **Profile, Zones & Privacy**, immediately unbinding the camera. There is zero background or covert monitoring.
-- **Video Frames (Zero Storage / Zero Upload)**: Camera frames exist strictly in volatile device RAM during real-time on-device SmartSpectra and MediaPipe inference and are closed immediately after each frame. Raw video or images are never saved to disk or transmitted externally.
+- **Video Frames (Zero Storage / Zero Upload)**: Camera frames exist strictly in volatile device RAM during real-time on-device SmartSpectra inference and are closed immediately after each frame. Raw video or images are never saved to disk or transmitted externally.
 - **Local Storage, Retention, Export & Deletion**:
-  - Completed workout summaries, sampled vitals logs (BPM, HRV, breathing rate, HR zone, confidence), and biomechanical fault episodes are stored **100% locally on-device** in an Android Room SQLite database (`fitlens_health_sqlite.db`).
+  - Completed workout summaries and sampled vitals logs (BPM, HRV, breathing rate, HR zone, confidence) are stored **100% locally on-device** in an Android Room SQLite database (`fitlens_health_sqlite.db`).
   - **Sharing**: Zero health or physiological data is shared with any cloud backend, analytics SDK, or third party.
   - **Retention & Deletion**: Records remain on-device solely until deleted by the user or uninstalling the app. Users can export all records to a local JSON file (`LocalDataExportManager`) or permanently erase every session, vitals log, and fault record in one tap via **Delete All Local Vault Data** (available in both **Profile & Privacy** and **Local Health Vault**).
 - **Presage SmartSpectra SDK Gating & Telemetry**:
@@ -74,7 +74,7 @@ FitLens is architected from the ground up around explicit consent, data minimiza
   - When the user explicitly taps the optional **Insight** chip (`sdk.requestInsight(...)`), SmartSpectra's insight service generates a brief wellness summary of current session metrics.
 - **Optional AI Service Disclosure**:
   - Physiological vitals and biomechanical telemetry are **never** sent to cloud LLMs; adaptive rest, fatigue halting, holistic biofeedback, and post-session evaluation always run 100% locally on-device.
-  - Optional pre-workout routine & 4-week mesocycle generation can call **Firebase AI Logic** (authenticated via Firebase App Check with zero embedded API keys), receiving *only* non-biometric workout preferences (`goal`, `experience`, `equipment`, `durationMinutes`), or can be switched to **100% Offline On-Device Edge Mode** (`LocalEdgeEngine`) right from the Consent dialog or Profile settings.
+  - Optional pre-workout routine generation can call **Firebase AI Logic** (authenticated via Firebase App Check with zero embedded API keys), receiving *only* non-biometric workout preferences (`goal`, `experience`, `equipment`, `durationMinutes`), or can be switched to **100% Offline On-Device Edge Mode** (`LocalEdgeEngine`) right from the Consent dialog or Profile settings.
 - **Non-Medical Wellness Boundary**: FitLens includes prominent in-app and documentation disclaimers stating that all metrics (including relative arterial pressure waveform shape, pulse, breathing rate, HRV, and form cues) are for general fitness and wellness coaching only—never for diagnosis, treatment, or medical decision-making.
 
 ## Agent Session

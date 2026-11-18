@@ -109,6 +109,7 @@ fun PersonalTrainerScreen(
     profile: UserProfile,
     assistantState: LiveAssistantState,
     moodSpeculation: MoodSpeculation,
+    aiCoachingPrompt: String?,
     processingStatus: ProcessingStatus,
     validationHint: String?,
     sdkErrorMessage: String?,
@@ -288,6 +289,7 @@ fun PersonalTrainerScreen(
                         generatedPlan = generatedPlan,
                         isGeneratingPlan = isGeneratingPlan,
                         showCustomizePlan = showCustomizePlan,
+                        recentSessions = recentSessions,
                         onToggleCustomizePlan = { showCustomizePlan = !showCustomizePlan },
                         onSelectExercise = onSelectExercise,
                         onGenerateWorkoutPlan = onGenerateWorkoutPlan,
@@ -559,6 +561,7 @@ private fun TrainTabContent(
     generatedPlan: WorkoutPlanResult,
     isGeneratingPlan: Boolean,
     showCustomizePlan: Boolean,
+    recentSessions: List<WorkoutSessionEntity>,
     onToggleCustomizePlan: () -> Unit,
     onSelectExercise: (String) -> Unit,
     onGenerateWorkoutPlan: (String, String, String, Int) -> Unit,
@@ -571,6 +574,7 @@ private fun TrainTabContent(
     val scrollState = rememberScrollState()
     val isWorkoutActive = workoutState.phase != WorkoutPhase.IDLE &&
         workoutState.phase != WorkoutPhase.COMPLETED
+    val isWorkoutCompleted = workoutState.phase == WorkoutPhase.COMPLETED
 
     var selectedGoal by remember { mutableStateOf("Six-Pack Abs") }
     var selectedLevel by remember { mutableStateOf("Intermediate") }
@@ -578,22 +582,30 @@ private fun TrainTabContent(
     var selectedDuration by remember { mutableStateOf(15) }
     var detailExercise by remember { mutableStateOf<String?>(null) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        if (isWorkoutActive) {
-            ActiveWorkoutPlayerSection(
-                workoutState = workoutState,
-                onIncrementRep = onIncrementRep,
-                onCompleteSet = onCompleteSet,
-                onSkipPhase = onSkipPhase,
-                onStopWorkout = onStopWorkout
-            )
-        } else {
+    if (isWorkoutCompleted) {
+        WorkoutSummaryScreen(
+            workoutState = workoutState,
+            recentSessions = recentSessions,
+            onBackToHome = onStopWorkout
+        )
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (isWorkoutActive) {
+                ActiveWorkoutPlayerSection(
+                    workoutState = workoutState,
+                    aiCoachingPrompt = aiCoachingPrompt,
+                    onIncrementRep = onIncrementRep,
+                    onCompleteSet = onCompleteSet,
+                    onSkipPhase = onSkipPhase,
+                    onStopWorkout = onStopWorkout
+                )
+            } else {
             // 1. Programs Horizontal Strip
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -1352,6 +1364,8 @@ private fun VitalsTabContent(
                 }
             }
         }
+    }
+    // Close the else block for isWorkoutCompleted
     }
 }
 
