@@ -29,8 +29,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -584,6 +590,12 @@ private fun TrainTabContent(
     var selectedEquipment by remember { mutableStateOf("Bodyweight") }
     var selectedDuration by remember { mutableStateOf(15) }
     var detailExercise by remember { mutableStateOf<String?>(null) }
+    var showPlanInfo by remember { mutableStateOf(false) }
+    val warmUpItems = listOf(
+        "Arm Circles" to "x10",
+        "Leg Swings" to "x10",
+        "Jumping Jacks" to "00:30"
+    )
 
     if (isWorkoutCompleted) {
         WorkoutSummaryScreen(
@@ -609,268 +621,274 @@ private fun TrainTabContent(
                     onStopWorkout = onStopWorkout
                 )
             } else {
-            // 1. Programs Horizontal Strip
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Programs",
-                    color = TEXT_PRIMARY,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    PLAY_STORE_WORKOUT_PROGRAMS.forEach { program ->
-                        val isSelected = selectedGoal.equals(program.goalKey, ignoreCase = true)
-                        Surface(
-                            modifier = Modifier
-                                .width(156.dp)
-                                .clickable {
-                                    selectedGoal = program.goalKey
-                                    selectedLevel = program.level
-                                    selectedDuration = program.durationMinutes
-                                    onGenerateWorkoutPlan(
-                                        program.goalKey,
-                                        program.level,
-                                        "Bodyweight",
-                                        program.durationMinutes
-                                    )
-                                },
-                            shape = RoundedCornerShape(16.dp),
-                            color = SURFACE_CARD,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) ACCENT_LIME else BORDER_ZINC
-                            )
-                        ) {
-                            Column {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(72.dp)
-                                        .clip(
-                                            RoundedCornerShape(
-                                                topStart = 16.dp,
-                                                topEnd = 16.dp
-                                            )
-                                        )
-                                ) {
-                                    ProgramArtwork(
-                                        accentColor = Color(program.accentHex),
-                                        goalKey = program.goalKey,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                    if (isSelected) {
-                                        Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = ACCENT_LIME,
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(8.dp)
-                                        ) {
-                                            Text(
-                                                text = "ACTIVE",
-                                                color = Color.Black,
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                modifier = Modifier.padding(
-                                                    horizontal = 6.dp,
-                                                    vertical = 3.dp
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                                Column(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(
-                                        text = program.badge,
-                                        color = if (isSelected) ACCENT_LIME else TEXT_MUTED,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = program.title,
-                                        color = TEXT_PRIMARY,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = program.subtitle,
-                                        color = TEXT_SECONDARY,
-                                        fontSize = 11.sp,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 2. Active Routine Card
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = SURFACE_CARD,
-                border = BorderStroke(1.dp, BORDER_ZINC)
+            // Workout detail page (program header, stats, settings, warm-up, exercises)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                // 1. Program header: DAY eyebrow, title, FAQ pill
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "TODAY'S ROUTINE",
-                                color = ACCENT_LIME,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "${generatedPlan.goal} • ${generatedPlan.targetDurationMinutes} min",
-                                color = TEXT_PRIMARY,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
+                        Text(
+                            text = "DAY 1",
+                            color = ACCENT_LIME,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 2.sp
+                        )
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(50),
                             color = SURFACE_ELEVATED,
                             border = BorderStroke(1.dp, BORDER_ZINC),
-                            modifier = Modifier.clickable { onToggleCustomizePlan() }
+                            modifier = Modifier.clickable { showPlanInfo = true }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Tune,
-                                    contentDescription = "Customize",
-                                    tint = TEXT_PRIMARY,
-                                    modifier = Modifier.size(14.dp)
+                                    imageVector = Icons.Default.HelpOutline,
+                                    contentDescription = "Workout info",
+                                    tint = TEXT_SECONDARY,
+                                    modifier = Modifier.size(13.dp)
                                 )
                                 Text(
-                                    text = "Customize",
-                                    color = TEXT_PRIMARY,
+                                    text = "FAQ",
+                                    color = TEXT_SECONDARY,
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
                     }
+                    Text(
+                        text = selectedGoal.uppercase(),
+                        color = TEXT_PRIMARY,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        text = "${selectedLevel} • ${selectedDuration} min • Bodyweight",
+                        color = TEXT_SECONDARY,
+                        fontSize = 13.sp
+                    )
+                }
 
-                    // Collapsible Customizer
-                    AnimatedVisibility(visible = showCustomizePlan) {
+                // 2. Meta row: program badge + focus areas
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ACCENT_LIME.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, ACCENT_LIME.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = programBadgeFor(selectedGoal),
+                                color = ACCENT_LIME,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = "Focus Areas",
+                            color = TEXT_SECONDARY,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        focusAreasFor(selectedGoal).forEach { area ->
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = SURFACE_ELEVATED,
+                                border = BorderStroke(1.dp, BORDER_ZINC)
+                            ) {
+                                Text(
+                                    text = area,
+                                    color = TEXT_SECONDARY,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3. Stats card: calories, duration, level
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = SURFACE_CARD,
+                    border = BorderStroke(1.dp, BORDER_ZINC)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        WorkoutStatRow(
+                            icon = Icons.Default.LocalFireDepartment,
+                            iconTint = ACCENT_ROSE,
+                            value = String.format(Locale.US, "%.1f kcal", selectedDuration * 8.5)
+                        )
+                        WorkoutStatRow(
+                            icon = Icons.Default.AccessTime,
+                            iconTint = ACCENT_SKY,
+                            value = "${selectedDuration} min"
+                        )
+                        WorkoutStatRow(
+                            icon = Icons.Default.EmojiEvents,
+                            iconTint = ACCENT_AMBER,
+                            value = selectedLevel
+                        )
+                    }
+                }
+
+                // 4. Workout settings row + collapsible customizer
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = SURFACE_CARD,
+                    border = BorderStroke(1.dp, BORDER_ZINC),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleCustomizePlan() }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = null,
+                                tint = TEXT_PRIMARY,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Workout settings",
+                                color = TEXT_PRIMARY,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Icon(
+                            imageVector = if (showCustomizePlan) {
+                                Icons.Default.KeyboardArrowUp
+                            } else {
+                                Icons.Default.KeyboardArrowDown
+                            },
+                            contentDescription = null,
+                            tint = TEXT_MUTED,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = showCustomizePlan) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SelectorRow(
+                            options = listOf("Six-Pack Abs", "Strength", "Chest & Arms", "Legs & Glutes", "HIIT Cardio"),
+                            selected = selectedGoal,
+                            onSelect = { selectedGoal = it }
+                        )
+                        SelectorRow(
+                            options = listOf("Beginner", "Intermediate", "Advanced"),
+                            selected = selectedLevel,
+                            onSelect = { selectedLevel = it }
+                        )
+                        SelectorRow(
+                            options = listOf("10m", "15m", "20m", "30m"),
+                            selected = "${selectedDuration}m",
+                            onSelect = { selectedDuration = it.removeSuffix("m").toIntOrNull() ?: 15 }
+                        )
+                        Button(
+                            onClick = {
+                                onGenerateWorkoutPlan(
+                                    selectedGoal,
+                                    selectedLevel,
+                                    selectedEquipment,
+                                    selectedDuration
+                                )
+                                onToggleCustomizePlan()
+                            },
+                            enabled = !isGeneratingPlan,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = SURFACE_ELEVATED)
+                        ) {
+                            Text(
+                                text = if (isGeneratingPlan) "Generating..." else "Update Routine",
+                                color = ACCENT_LIME,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                // 5. Warm-up section
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Warm-up",
+                        color = TEXT_PRIMARY,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = SURFACE_CARD,
+                        border = BorderStroke(1.dp, BORDER_ZINC)
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            SelectorRow(
-                                options = listOf("Six-Pack Abs", "Strength", "Chest & Arms", "Legs & Glutes", "HIIT Cardio"),
-                                selected = selectedGoal,
-                                onSelect = { selectedGoal = it }
-                            )
-                            SelectorRow(
-                                options = listOf("Beginner", "Intermediate", "Advanced"),
-                                selected = selectedLevel,
-                                onSelect = { selectedLevel = it }
-                            )
-                            SelectorRow(
-                                options = listOf("10m", "15m", "20m", "30m"),
-                                selected = "${selectedDuration}m",
-                                onSelect = { selectedDuration = it.removeSuffix("m").toIntOrNull() ?: 15 }
-                            )
-                            Button(
-                                onClick = {
-                                    onGenerateWorkoutPlan(
-                                        selectedGoal,
-                                        selectedLevel,
-                                        selectedEquipment,
-                                        selectedDuration
-                                    )
-                                    onToggleCustomizePlan()
-                                },
-                                enabled = !isGeneratingPlan,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = SURFACE_ELEVATED)
-                            ) {
-                                Text(
-                                    text = if (isGeneratingPlan) "Generating..." else "Update Routine",
-                                    color = ACCENT_LIME,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-                    }
-
-                    // Clean Exercise List
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        generatedPlan.targetExercises.forEachIndexed { index, exercise ->
-                            val isHold = exercise.contains("Plank", ignoreCase = true)
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = SURFACE_ELEVATED,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelectExercise(exercise) }
-                            ) {
+                            warmUpItems.forEach { (name, dose) ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        .padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        ExerciseGlyphBadge(exerciseName = exercise)
-                                        Text(
-                                            text = "${index + 1}",
-                                            color = ACCENT_LIME,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = exercise,
-                                            color = TEXT_PRIMARY,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = "Exercise details",
-                                        tint = TEXT_MUTED,
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clickable { detailExercise = exercise }
+                                    Text(
+                                        text = name,
+                                        color = TEXT_PRIMARY,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                     Text(
-                                        text = if (isHold) "3 × 30s" else "3 × 12",
+                                        text = dose,
                                         color = TEXT_SECONDARY,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
@@ -879,80 +897,144 @@ private fun TrainTabContent(
                             }
                         }
                     }
+                }
 
-                    Button(
-                        onClick = { onStartGeneratedRoutine(generatedPlan) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ACCENT_LIME)
+                // 6. Exercises list
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Start Workout",
-                            color = Color.Black,
+                            text = "Exercises (${generatedPlan.targetExercises.size})",
+                            color = TEXT_PRIMARY,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Edit>",
+                            color = ACCENT_LIME,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            modifier = Modifier.clickable { onToggleCustomizePlan() }
                         )
                     }
+
+                    generatedPlan.targetExercises.forEach { exercise ->
+                        val isHold = exercise.contains("Plank", ignoreCase = true)
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = SURFACE_CARD,
+                            border = BorderStroke(1.dp, BORDER_ZINC),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelectExercise(exercise) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                AnimatedExerciseIllustration(
+                                    exerciseName = exercise,
+                                    modifier = Modifier
+                                        .size(width = 104.dp, height = 76.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = exercise,
+                                        color = TEXT_PRIMARY,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (isHold) "00:30" else "x12",
+                                        color = TEXT_SECONDARY,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Exercise details",
+                                    tint = TEXT_MUTED,
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clickable { detailExercise = exercise }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 7. Start button
+                Button(
+                    onClick = { onStartGeneratedRoutine(generatedPlan) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ACCENT_LIME)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Start",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
                 }
             }
-
-            // 3. Quick Drills Grid
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Quick Start",
-                    color = TEXT_PRIMARY,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                val quickExercises = listOf(
-                    "Bodyweight Squats" to "Legs",
-                    "Push-ups" to "Chest",
-                    "Forward Lunges" to "Glutes",
-                    "Forearm Plank" to "Core"
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    quickExercises.take(2).forEach { (name, tag) ->
-                        QuickExerciseTile(
-                            name = name,
-                            tag = tag,
-                            onClick = { onSelectExercise(name) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    quickExercises.drop(2).forEach { (name, tag) ->
-                        QuickExerciseTile(
-                            name = name,
-                            tag = tag,
-                            onClick = { onSelectExercise(name) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
             }
         }
+    }
+
+    if (showPlanInfo) {
+        AlertDialog(
+            onDismissRequest = { showPlanInfo = false },
+            containerColor = SURFACE_CARD,
+            title = {
+                Text(
+                    text = "Workout info",
+                    color = TEXT_PRIMARY,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = generatedPlan.aiCoachRationale.ifBlank {
+                        "${generatedPlan.goal} • ${generatedPlan.targetDurationMinutes} min • ${generatedPlan.recommendedRestIntervalSeconds}s rest between sets."
+                    },
+                    color = TEXT_SECONDARY,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showPlanInfo = false }) {
+                    Text("OK", color = ACCENT_LIME, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 
     detailExercise?.let { name ->
         ExerciseDetailSheet(exerciseName = name, onDismiss = { detailExercise = null })
     }
-}
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1047,52 +1129,61 @@ private fun ExerciseDetailSheet(
     }
 }
 
+
 @Composable
-private fun QuickExerciseTile(
-    name: String,
-    tag: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.clickable { onClick() },
-        shape = RoundedCornerShape(14.dp),
-        color = SURFACE_CARD,
-        border = BorderStroke(1.dp, BORDER_ZINC)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = tag.uppercase(),
-                    color = TEXT_MUTED,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = name.removePrefix("Bodyweight ").removePrefix("Forward ").removePrefix("Forearm "),
-                    color = TEXT_PRIMARY,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = ACCENT_LIME,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-    }
+private fun programBadgeFor(goal: String): String = when {
+    goal.contains("abs", ignoreCase = true) || goal.contains("core", ignoreCase = true) -> "CORE"
+    goal.contains("chest", ignoreCase = true) || goal.contains("arm", ignoreCase = true) -> "UPPER"
+    goal.contains("leg", ignoreCase = true) || goal.contains("glute", ignoreCase = true) -> "LEGS"
+    goal.contains("hiit", ignoreCase = true) || goal.contains("cardio", ignoreCase = true) -> "HIIT"
+    else -> "FULL"
+}
+
+private fun focusAreasFor(goal: String): List<String> = when {
+    goal.contains("abs", ignoreCase = true) || goal.contains("core", ignoreCase = true) ||
+        goal.contains("six", ignoreCase = true) -> listOf("Abs", "Obliques", "Core")
+    goal.contains("chest", ignoreCase = true) || goal.contains("arm", ignoreCase = true) ||
+        goal.contains("upper", ignoreCase = true) -> listOf("Chest", "Shoulders", "Arms")
+    goal.contains("leg", ignoreCase = true) || goal.contains("glute", ignoreCase = true) ||
+        goal.contains("lower", ignoreCase = true) -> listOf("Quads", "Glutes", "Hamstrings")
+    goal.contains("hiit", ignoreCase = true) || goal.contains("cardio", ignoreCase = true) ->
+        listOf("Full Body", "Cardio")
+    else -> listOf("Full Body", "Core")
 }
 
 @Composable
+private fun WorkoutStatRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    value: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = iconTint.copy(alpha = 0.14f),
+            modifier = Modifier.size(36.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        Text(
+            text = value,
+            color = TEXT_PRIMARY,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
 private fun SelectorRow(
     options: List<String>,
     selected: String,
