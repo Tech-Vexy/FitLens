@@ -13,7 +13,7 @@ data class ProgressionInsight(
 class ProgressAnalyzer {
 
     /**
-     * Evaluates recent sessions and form metrics to determine progressive overload.
+     * Evaluates recent sessions and available physiological metrics to determine progressive overload.
      */
     fun analyzeProgression(recentSessions: List<WorkoutSessionEntity>): ProgressionInsight {
         if (recentSessions.isEmpty()) {
@@ -26,30 +26,36 @@ class ProgressAnalyzer {
             )
         }
 
-        val avgAccuracy = recentSessions.map { it.formAccuracyPercentage }.average()
-        val avgHeartRate = recentSessions.map { it.averageHeartRate }.average()
+        val hrSessions = recentSessions.filter {
+            it.averageHeartRate.isFinite() && it.averageHeartRate > 0.0
+        }
+        val avgHeartRate = if (hrSessions.isEmpty()) {
+            0.0
+        } else {
+            hrSessions.map { it.averageHeartRate }.average()
+        }
         val latestSession = recentSessions.first()
 
         val readinessScore = when {
-            avgAccuracy >= 90.0 && avgHeartRate < 145.0 -> 92
-            avgAccuracy >= 80.0 && avgHeartRate < 160.0 -> 80
-            avgAccuracy < 75.0 -> 60
-            else -> 70
+            hrSessions.isEmpty() -> 70
+            avgHeartRate < 145.0 -> 90
+            avgHeartRate < 160.0 -> 80
+            else -> 65
         }
 
         return when {
-            avgAccuracy >= 90.0 && readinessScore > 85 -> ProgressionInsight(
-                title = "Ready for Progressive Overload",
-                description = "Exceptional form stability (${avgAccuracy.toInt()}%). Increase volume by 2 reps or reduce rest interval by 10s next session.",
-                recommendedRepsDelta = 2,
-                recommendedRestAdjustmentSeconds = -10,
+            hrSessions.isEmpty() -> ProgressionInsight(
+                title = "Limited Physiological Data",
+                description = "Heart-rate samples were unavailable for recent sessions. Enable camera sensing for recovery and exertion insights.",
+                recommendedRepsDelta = 0,
+                recommendedRestAdjustmentSeconds = 0,
                 overallReadinessScore = readinessScore
             )
-            avgAccuracy < 80.0 -> ProgressionInsight(
-                title = "Form Consolidation Priority",
-                description = "Form accuracy dipped to ${avgAccuracy.toInt()}%. Maintain current volume and focus on joint alignment before increasing load.",
-                recommendedRepsDelta = 0,
-                recommendedRestAdjustmentSeconds = 15,
+            avgHeartRate < 145.0 && readinessScore >= 85 -> ProgressionInsight(
+                title = "Ready for Progressive Overload",
+                description = "Controlled average heart rate (${avgHeartRate.toInt()} BPM). Increase volume by 2 reps or reduce rest interval by 10s next session.",
+                recommendedRepsDelta = 2,
+                recommendedRestAdjustmentSeconds = -10,
                 overallReadinessScore = readinessScore
             )
             latestSession.extendedRestSeconds > 30 -> ProgressionInsight(

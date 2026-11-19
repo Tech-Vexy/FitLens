@@ -7,6 +7,7 @@ import com.fitlens.app.data.model.WorkoutSessionEntity
 import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.vitals.HeartRateZone
 import com.fitlens.app.vitals.PresageFrameAnalyzer
+import com.fitlens.app.vitals.VitalsReading
 import com.fitlens.app.workout.ProgressAnalyzer
 import com.fitlens.app.workout.WorkoutManager
 import com.fitlens.app.workout.WorkoutPhase
@@ -153,7 +154,31 @@ class FitnessCoachTest {
 
         val finishedSession = manager.finishWorkout()
         assertEquals("Bodyweight Squats", finishedSession.exerciseName)
+        assertEquals(0.0, finishedSession.averageHeartRate, 0.0)
+        assertEquals(0.0, finishedSession.maxHeartRate, 0.0)
+        assertEquals(-1.0, finishedSession.formAccuracyPercentage.toDouble(), 0.0)
+        assertEquals(-1, finishedSession.totalFormDeviations)
         assertEquals(WorkoutPhase.COMPLETED, manager.state.value.phase)
+        manager.cleanup()
+    }
+
+    @Test
+    fun testSimulatedVitalsAreNotPersistedAsMeasuredHeartRate() = runBlocking {
+        val manager = WorkoutManager()
+        manager.startWorkout(exercise = "Bodyweight Squats", targetReps = 5, totalSets = 1)
+
+        manager.onVitalsReading(
+            VitalsReading(
+                heartRateBpm = 155.0,
+                signalConfidence = 0.92f,
+                isReliable = true,
+                isSimulated = true
+            )
+        )
+
+        val session = manager.finishWorkout()
+        assertEquals(0.0, session.averageHeartRate, 0.0)
+        assertEquals(0.0, session.maxHeartRate, 0.0)
         manager.cleanup()
     }
 

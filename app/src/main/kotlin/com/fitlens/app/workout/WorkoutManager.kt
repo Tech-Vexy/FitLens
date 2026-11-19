@@ -217,12 +217,9 @@ class WorkoutManager(
     }
 
     fun onVitalsReading(vitals: VitalsReading) {
-        if (vitals.heartRateBpm > 30.0) {
+        if (!vitals.isSimulated && vitals.isReliable && vitals.heartRateBpm > 30.0) {
             synchronized(hrSamples) {
                 hrSamples.add(vitals.heartRateBpm)
-                if (hrSamples.size > 600) {
-                    hrSamples.subList(0, hrSamples.size - 600).clear()
-                }
             }
         }
         val current = _state.value
@@ -426,11 +423,16 @@ class WorkoutManager(
 
         val (avgHr, maxHr) = synchronized(hrSamples) {
             if (hrSamples.isNotEmpty()) {
-                Pair(hrSamples.average(), hrSamples.maxOrNull() ?: 160.0)
+                Pair(hrSamples.average(), hrSamples.maxOrNull() ?: WorkoutSessionEntity.HEART_RATE_UNAVAILABLE)
             } else {
-                Pair(135.0, 160.0)
+                Pair(
+                    WorkoutSessionEntity.HEART_RATE_UNAVAILABLE,
+                    WorkoutSessionEntity.HEART_RATE_UNAVAILABLE
+                )
             }
         }
+        val hasHeartRateSamples = avgHr > WorkoutSessionEntity.HEART_RATE_UNAVAILABLE &&
+            maxHr > WorkoutSessionEntity.HEART_RATE_UNAVAILABLE
 
         val current = _state.value
         val inProgressReps =
@@ -447,11 +449,10 @@ class WorkoutManager(
 
         val evaluation = coachAgent.evaluateSession(
             durationSeconds = current.elapsedSeconds,
-            avgHrBpm = avgHr,
-            formDeviations = 0
+            avgHrBpm = avgHr
         )
 
-        val recoveryNote = if (current.heartRateRecoveryDropBpm >= 8.0) {
+        val recoveryNote = if (hasHeartRateSamples && current.heartRateRecoveryDropBpm >= 8.0) {
             " HR recovery drop: -${current.heartRateRecoveryDropBpm.toInt()} BPM."
         } else {
             ""
@@ -464,8 +465,8 @@ class WorkoutManager(
             durationSeconds = current.elapsedSeconds,
             averageHeartRate = avgHr,
             maxHeartRate = maxHr,
-            formAccuracyPercentage = 100f,
-            totalFormDeviations = 0,
+            formAccuracyPercentage = WorkoutSessionEntity.FORM_ACCURACY_UNMEASURED,
+            totalFormDeviations = WorkoutSessionEntity.FORM_DEVIATIONS_UNMEASURED,
             extendedRestSeconds = extendedRestTotalSeconds,
             coachFeedback = "${evaluation.summary} ${evaluation.recommendation}$recoveryNote (Wellness coaching only — non-medical.)"
         )

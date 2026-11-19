@@ -42,7 +42,7 @@ class LocalEdgeEngine {
 
         private val FALLBACK_PARAM_NAMES: Map<String, List<String>> = mapOf(
             "generateWorkoutPlan" to listOf("goal", "experience", "equipment", "durationMinutes"),
-            "analyzeSession" to listOf("sessionDurationSeconds", "averageHeartRateBpm", "formDeviations"),
+            "analyzeSession" to listOf("sessionDurationSeconds", "averageHeartRateBpm"),
             "calculateAdaptiveRest" to listOf("baseRestSeconds", "currentHeartRateBpm", "restingHeartRateBpm"),
             "evaluateBiomechanicalFatigue" to listOf("consecutiveDeviations", "currentSetRepsCompleted", "targetReps"),
             "generateMesocyclePeriodization" to listOf("goal", "weeksCount", "daysPerWeek"),
@@ -54,7 +54,8 @@ class LocalEdgeEngine {
             "weeksCount" to 4,
             "daysPerWeek" to 3,
             "hrvRmssdMs" to 45.0,
-            "facialExpression" to "Neutral"
+            "facialExpression" to "Neutral",
+            "averageHeartRateBpm" to 0.0
         )
 
         private val PARAM_KEYWORDS: Map<String, List<String>> = mapOf(
@@ -71,7 +72,6 @@ class LocalEdgeEngine {
             "currentSetRepsCompleted" to listOf("reps completed", "reps", "rep"),
             "targetReps" to listOf("target reps", "reps", "rep"),
             "consecutiveDeviations" to listOf("consecutive", "deviations", "deviation"),
-            "formDeviations" to listOf("deviations", "deviation", "form"),
             "weeksCount" to listOf("weeks", "week"),
             "daysPerWeek" to listOf("days per week", "days", "day")
         )
@@ -297,7 +297,7 @@ class LocalEdgeEngine {
         }
         is SessionAnalysisResult -> buildString {
             append(result.summary).append(' ')
-            append("Exertion ${result.exertionScore}/10, form ${result.formAccuracyPercentage.toInt()}%. ")
+            append("Exertion ${result.exertionScore?.let { "$it/10" } ?: "unavailable"}. ")
             append(result.recommendation)
         }
         is RestAdjustmentResult -> buildString {

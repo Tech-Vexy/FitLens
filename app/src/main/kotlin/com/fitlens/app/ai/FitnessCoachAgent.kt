@@ -26,7 +26,7 @@ class FitnessCoachAgent(
         const val MODEL_GEMINI_NANO = "gemini-nano-v2"
 
         const val SYSTEM_INSTRUCTION = """
-            You are the FitLens AI Fitness and Biomechanics Coach built with Google ADK Kotlin.
+            You are the FitLens Fitness and Wellness Coach built with Google ADK Kotlin.
             Use provided tools for plan generation, session analysis, adaptive rest recovery,
             and physiological/biomechanical safety feedback.
             Never diagnose medical conditions, claim clinical treatment, or advise against physician guidance.
@@ -92,11 +92,10 @@ class FitnessCoachAgent(
      */
     fun evaluateSession(
         durationSeconds: Int,
-        avgHrBpm: Double,
-        formDeviations: Int
+        avgHrBpm: Double
     ): SessionAnalysisResult {
-        Log.i(TAG, "Evaluating session locally with vitals: $avgHrBpm bpm, deviations: $formDeviations")
-        return tools.analyzeSession(durationSeconds, avgHrBpm, formDeviations)
+        Log.i(TAG, "Evaluating session locally with vitals: $avgHrBpm bpm")
+        return tools.analyzeSession(durationSeconds, avgHrBpm)
     }
 
     /**

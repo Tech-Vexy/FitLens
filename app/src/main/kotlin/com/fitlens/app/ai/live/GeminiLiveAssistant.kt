@@ -70,7 +70,7 @@ class GeminiLiveAssistant(
         const val LIVE_MODEL_NAME = "gemini-3.8-live"
 
         const val TRAINER_SYSTEM_INSTRUCTION = """
-            You are FitLens AI, a perceptive, emotionally intelligent Personal AI Trainer & Wellness Companion.
+            You are FitLens, a perceptive, emotionally intelligent Personal AI Trainer & Wellness Companion.
             You can see the user's live facial features and expressions, and you receive real-time physiological context (heart rate, HRV, breathing cadence, recent trends, and time of day).
 
             How to coach and converse naturally:

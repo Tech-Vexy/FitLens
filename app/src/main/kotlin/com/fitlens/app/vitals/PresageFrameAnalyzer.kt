@@ -33,6 +33,7 @@ data class VitalsReading(
     val validationHint: String = "",
     val smartSpectraLlmInsight: String? = null,
     val isReliable: Boolean = false,
+    val isSimulated: Boolean = false,
     val timestampMs: Long = System.currentTimeMillis()
 )
 
@@ -169,7 +170,8 @@ class PresageFrameAnalyzer(
         pulseTrace: List<Float> = _vitalsFlow.value.arterialPressureTrace,
         chestTrace: List<Float> = _vitalsFlow.value.chestBreathingTrace,
         abdomenTrace: List<Float> = _vitalsFlow.value.abdomenBreathingTrace,
-        expression: String? = _vitalsFlow.value.facialExpression
+        expression: String? = _vitalsFlow.value.facialExpression,
+        isSimulated: Boolean = false
     ) {
         val zone = calculateZone(hr)
         val currentHint = _vitalsFlow.value.validationHint
@@ -186,6 +188,7 @@ class PresageFrameAnalyzer(
             validationHint = currentHint,
             smartSpectraLlmInsight = llmInsight,
             isReliable = confidence > 0.65f,
+            isSimulated = isSimulated,
             timestampMs = System.currentTimeMillis()
         )
     }
@@ -262,7 +265,8 @@ class PresageFrameAnalyzer(
             pulseTrace = pulseWave,
             chestTrace = breathWave,
             abdomenTrace = breathWave.map { it * 0.85f },
-            expression = simulatedExpression
+            expression = simulatedExpression,
+            isSimulated = true
         )
     }
 }

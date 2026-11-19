@@ -1,106 +1,111 @@
-# FitLens — Day 1 Hard Gate Verification Runbook
+# FitLens — Verification Runbook
 
-This runbook guides engineers through verifying all 5 Day 1 Hard Gates on a physical Android device and in headless CI before proceeding with extended feature development.
+This runbook verifies the current FitLens pipeline: consent-gated CameraX capture, Presage SmartSpectra custom-input vitals, workout coaching, local persistence, secrets handling, and optional Firebase AI boundaries.
 
----
+Suggested DEV title for the challenge post:
 
-## 🎯 The 5 Day 1 Hard Gates
-
-| Gate # | Component | Objective | Target Outcome |
-| :---: | :--- | :--- | :--- |
-| **Gate 1** | **Presage SmartSpectra SDK** | Ingest video frames via `useCustomInput()` and extract valid rPPG pulse reading | Valid BPM (> 45) with confidence > 0.65 |
-| **Gate 2** | **MediaPipe PoseLandmarker** | Stream camera frames concurrently and extract 33 3D skeletal landmarks | Landmark stream active (all 33 vertices) |
-| **Gate 3** | **ADK Kotlin Agent** | Execute minimal `AdkLlmAgent` with `@Tool` functions via `AdkInMemoryRunner` | Plan generated via structured tools |
-| **Gate 4** | **Firebase App Check** | Attest app authenticity with Play Integrity / Debug provider without client API keys | Calls pass with App Check; fail when disabled |
-| **Gate 5** | **Secrets Injection** | Resolve `BuildConfig.PRESAGE_API_KEY` at compile time with zero secrets in Git history | `secrets.properties` untracked in Git |
+**FitLens: The AI-Powered Fitness App You Can Use Without Wearables**
 
 ---
 
-## 🛠️ Step-by-Step Verification Procedure
+## ✅ Automated Checks
 
-### Gate 1 & Gate 2: Presage + MediaPipe Dual Stream
+Run from the repository root:
 
-1. **Option A: Automated Headless Smoke Test (On-Device or CI)**:
-   - Launch FitLens on your device or emulator.
-   - On the main dashboard, tap **"Run Day 1 Hard Gate Automated Verification"**.
-   - The [`HeadlessVideoFeeder`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/testing/HeadlessVideoFeeder.kt) pumps frames through [`DualStreamAnalyzer`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/camera/DualStreamAnalyzer.kt).
-   - Expected Output:
-     ```
-     ✅ Day 1 Hard Gate VERIFIED: Presage rPPG active (136 BPM, confidence: 0.92) and MediaPipe emitted 33 landmarks.
-     ```
+```bash
+./scripts/verify_fitlens.sh
+./gradlew testDebugUnitTest
+./gradlew installDebug
+```
 
-2. **Option B: Live Camera Surface Verification**:
-   - From Dashboard, tap **"Squats"** or **"Push-ups"**.
-   - Tap the **Camera icon** in the top bar to grant camera permission.
-   - Stand back so full body is visible in the viewfinder.
-   - Verify:
-     - The skeleton wireframe renders over the camera preview in green (`#00E676`).
-     - Perform a squat: verify the rep counter increments and joint angle updates.
-     - Intentionally cave knees inward: verify the wireframe highlights warning red (`#FF5252`) and the alert *"Knees caving inward (valgus)"* triggers.
-     - Verify the live heart rate card displays your contact-free pulse reading.
+`verify_fitlens.sh` checks that:
+
+- `secrets.properties` is not tracked by Git.
+- No raw `GEMINI_API_KEY` string exists in app source.
+- `local.defaults.properties` provides the build fallback.
+- The local SQLite health database is configured.
+- Unit tests pass.
 
 ---
 
-### Gate 3: ADK Kotlin Agent Smoke Test
+## 📷 1. Consent & Camera Gate
 
-1. On the FitLens Dashboard, scroll to the **ADK Coach AI Generator** card.
-2. Select:
-   - Target Focus: `Hypertrophy`
-   - Equipment: `Dumbbells`
-3. Tap **"Generate Plan via ADK Agent"**.
-4. Verify:
-   - Agent executes via [`AdkInMemoryRunner`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/ai/adk/AdkAgentArchitecture.kt).
-   - Tool `generateWorkoutPlan` returns exercises: *"Barbell Squat, Romanian Deadlift, Overhead Press"*.
-   - Target rest interval is populated (e.g. 75s).
-   - Zero `GEMINI_API_KEY` was passed or used in the call.
+1. Launch FitLens on a physical Android device.
+2. Confirm the camera preview stays off and SmartSpectra does not process frames before consent.
+3. Tap **Sense** or **Enable**, review **Camera & Vitals Consent**, and accept.
+4. Grant Android camera permission when prompted.
+5. Confirm sensing can be stopped from the bottom **Stop** control and that revoking **Camera Sensing Consent** in Profile & Settings stops the session.
+
+Expected: no camera frames are processed before consent + permission, and no background monitoring continues after the app is paused or consent is revoked.
 
 ---
 
-### Gate 4: Firebase App Check Attestation Test
+## 💓 2. Live SmartSpectra Vitals
 
-1. **Firebase Console Configuration**:
-   - Register your app's debug and release SHA-256 fingerprints under **Firebase Console ➔ Project Settings ➔ App Check**.
-   - In debug builds, [`FitLensApp`](file:///home/veldrine/FitLens/app/src/main/kotlin/com/fitlens/app/FitLensApp.kt) initializes `DebugAppCheckProviderFactory`.
-   - In release builds, `PlayIntegrityAppCheckProviderFactory` attests the app binary with Google Play.
-2. **Negative Enforcement Test**:
-   - In Firebase Console, temporarily set App Check enforcement to **Enforced**.
-   - Run the app without registered debug token: verify cloud calls are rejected with `UNAUTHENTICATED (401/403)`.
-   - Register the debug token logged in Logcat (`FirebaseAppCheck`): verify cloud calls immediately succeed.
-   - This proves identity attestation protects your quota without a client-side secret.
+1. Open the **Vitals** tab and keep the face centered in steady, diffuse light.
+2. Confirm live values appear for:
+   - Heart rate (`BPM`)
+   - Breathing rate (`BRPM`)
+   - HRV (`RMSSD`, `ms`)
+   - Facial expression / readiness cue
+   - Signal confidence
+   - PPG and respiratory waveform traces
+   - SmartSpectra `validationStatus` framing hints
+3. Optionally open **Coach** to view SmartSpectra insight/mood output.
 
----
+Notes:
 
-### Gate 5: Secrets Injection & Git Audit
-
-1. **Verify Secret Resolution**:
-   - Confirm `secrets.properties` exists in project root:
-     ```properties
-     PRESAGE_API_KEY=your_actual_key_here
-     ```
-   - Build the app:
-     ```bash
-     ./gradlew assembleDebug
-     ```
-   - Confirm `BuildConfig.PRESAGE_API_KEY` contains the real key and not `PLACEHOLDER_RUN_SETUP`.
-2. **Verify Untracked in Git**:
-   - Run:
-     ```bash
-     git status --ignored
-     git ls-files secrets.properties
-     ```
-   - Confirm `secrets.properties` output from `ls-files` is completely empty.
+- SmartSpectra metric computation runs on-device, but the SDK needs network access for API-key/subscription gating.
+- SmartSpectra LLM Insights send buffered numeric vitals plus prompt/request metadata to Presage’s Analytics Gateway; raw video and facial imagery are not sent for insights.
+- Live camera verification is required for the challenge demo; emulator simulation is only for development/testing.
 
 ---
 
-## 🔒 Health Data Privacy Verification (Local SQLite)
+## 🏋️ 3. Workout Coaching Flow
 
-1. Open Android Studio **App Inspection ➔ Database Inspector**.
-2. Select `fitlens_health_sqlite.db`.
-3. Complete a 10-rep squat workout and finish the session.
-4. Verify:
-   - Table `workout_sessions` contains the session row.
-   - Table `local_vitals_telemetry` contains time-series rows for each vitals reading during the set and rest interval.
-   - Table `local_biomechanical_faults` logs any detected deviations.
-5. Inspect Logcat / Network Profiler:
-   - Confirm **zero network requests** containing heart rate, HRV, breathing, or joint angle payloads.
-   - Health data is 100% on-device.
+1. On the **Train** tab, open **Workout settings** and choose a goal, level, and duration.
+2. Tap **Update Routine**, then either:
+   - Tap a single exercise card for a short session, or
+   - Tap **Start** for the full generated routine.
+3. During an active set:
+   - Use **+1 Rep** for rep-based exercises or let a timed hold such as **Plank** progress automatically.
+   - Confirm TTS/audio cues and the coaching banner reflect live vitals where available.
+4. At the end of a set, confirm the rest/cooldown stage shows:
+   - Countdown
+   - Recovery breathing pacer (**4s inhale / 6s exhale**)
+   - Adaptive-rest messaging when heart rate remains elevated beyond the personalized resting-HR delta thresholds (**+15s / +30s**)
+   - HRV/readiness context
+5. Finish or stop the workout and confirm the **Workout Complete** summary shows duration, reps, average/peak HR, HR recovery, adaptive rest added, exertion score, and coach feedback.
+
+---
+
+## 🧪 4. Pipeline Smoke Test
+
+1. Open the profile icon → **Profile & Settings**.
+2. Tap **Run Pipeline Smoke Test**.
+3. Confirm the result reports the SmartSpectra gate as passed.
+
+This smoke test exercises the app-side vitals/simulation path for CI and emulator checks. It is not a substitute for live camera verification with a real Presage signal.
+
+---
+
+## 🔐 5. Privacy & Data Handling Checks
+
+- Confirm raw camera frames are processed in memory and are not written to disk as video/images by FitLens.
+- Confirm completed workout summaries persist locally in `fitlens_health_sqlite.db`.
+- In **Profile & Settings**, confirm **Clear Local Data** removes stored local health records.
+- Confirm **SDK Diagnostic Telemetry** can be disabled via the `enableTelemetry` preference.
+- If testing optional cloud AI:
+  - Routine generation sends only non-biometric preferences such as goal, experience, equipment, and duration.
+  - **Offline Edge AI Mode** keeps coach text/routine responses local and disables the cloud Live Voice path.
+  - Optional **Live Voice** may send microphone audio, compressed low-resolution JPEG frames, and disclosed wellness context to Firebase AI Live.
+- Confirm the app includes the non-medical wellness disclaimer and does not claim diagnosis or treatment.
+
+---
+
+## 🔑 6. Secrets & Optional Firebase
+
+- Keep `secrets.properties` git-ignored and never commit `PRESAGE_API_KEY`.
+- If `secrets.properties` is absent, the build falls back to `local.defaults.properties` for smoke-test development.
+- `app/google-services.json` is optional. Without it or when Firebase AI Logic is unavailable, `FitnessCoachAgent` falls back to the local edge path.
+- SmartSpectra still requires network access for API-key/subscription gating even when Firebase AI is unavailable.

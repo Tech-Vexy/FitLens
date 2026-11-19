@@ -177,8 +177,14 @@ private fun SessionOverviewCard(session: WorkoutSessionEntity, fmt: SimpleDateFo
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 StatPill(label = "Reps", value = "${session.completedReps}")
-                StatPill(label = "Avg HR", value = "${session.averageHeartRate.roundToInt()}")
-                StatPill(label = "Peak HR", value = "${session.maxHeartRate.roundToInt()}")
+                StatPill(
+                    label = "Avg HR",
+                    value = if (session.averageHeartRate > 0.0) "${session.averageHeartRate.roundToInt()}" else "--"
+                )
+                StatPill(
+                    label = "Peak HR",
+                    value = if (session.maxHeartRate > 0.0) "${session.maxHeartRate.roundToInt()}" else "--"
+                )
             }
         }
     }
@@ -224,48 +230,58 @@ private fun PhysiologicalTrendsCard(session: WorkoutSessionEntity) {
                 fontWeight = FontWeight.Bold
             )
 
-            // Heart rate zone breakdown
-            val hrZone = when {
-                session.averageHeartRate < 100 -> "Resting"
-                session.averageHeartRate < 120 -> "Zone 1 · Fat Burn"
-                session.averageHeartRate < 140 -> "Zone 2 · Cardio"
-                session.averageHeartRate < 160 -> "Zone 3 · Aerobic"
-                session.averageHeartRate < 175 -> "Zone 4 · Anaerobic"
-                else -> "Zone 5 · Max Effort"
-            }
-            val zoneColor = when {
-                session.averageHeartRate < 120 -> FitLensPalette.Sky
-                session.averageHeartRate < 140 -> FitLensPalette.Emerald
-                session.averageHeartRate < 160 -> FitLensPalette.Lime
-                session.averageHeartRate < 175 -> FitLensPalette.Amber
-                else -> FitLensPalette.Rose
-            }
+            val hasHeartRate = session.averageHeartRate.isFinite() && session.averageHeartRate > 0.0 &&
+                session.maxHeartRate.isFinite() && session.maxHeartRate > 0.0
+            if (hasHeartRate) {
+                // Heart rate zone breakdown
+                val hrZone = when {
+                    session.averageHeartRate < 100 -> "Resting"
+                    session.averageHeartRate < 120 -> "Zone 1 · Fat Burn"
+                    session.averageHeartRate < 140 -> "Zone 2 · Cardio"
+                    session.averageHeartRate < 160 -> "Zone 3 · Aerobic"
+                    session.averageHeartRate < 175 -> "Zone 4 · Anaerobic"
+                    else -> "Zone 5 · Max Effort"
+                }
+                val zoneColor = when {
+                    session.averageHeartRate < 120 -> FitLensPalette.Sky
+                    session.averageHeartRate < 140 -> FitLensPalette.Emerald
+                    session.averageHeartRate < 160 -> FitLensPalette.Lime
+                    session.averageHeartRate < 175 -> FitLensPalette.Amber
+                    else -> FitLensPalette.Rose
+                }
 
-            TrendRow(
-                label = "Heart Rate Zone",
-                value = hrZone,
-                accentColor = zoneColor
-            )
+                TrendRow(
+                    label = "Heart Rate Zone",
+                    value = hrZone,
+                    accentColor = zoneColor
+                )
 
-            // HR recovery indicator
-            val hrRecovery = session.maxHeartRate - session.averageHeartRate
-            val recoveryLabel = when {
-                hrRecovery > 30 -> "Excellent Recovery"
-                hrRecovery > 15 -> "Good Recovery"
-                hrRecovery > 5 -> "Moderate Recovery"
-                else -> "Elevated — Rest Well"
+                // HR recovery indicator
+                val hrRecovery = session.maxHeartRate - session.averageHeartRate
+                val recoveryLabel = when {
+                    hrRecovery > 30 -> "Excellent Recovery"
+                    hrRecovery > 15 -> "Good Recovery"
+                    hrRecovery > 5 -> "Moderate Recovery"
+                    else -> "Elevated — Rest Well"
+                }
+                val recoveryColor = when {
+                    hrRecovery > 30 -> FitLensPalette.Emerald
+                    hrRecovery > 15 -> FitLensPalette.Lime
+                    hrRecovery > 5 -> FitLensPalette.Amber
+                    else -> FitLensPalette.Rose
+                }
+                TrendRow(
+                    label = "HR Recovery",
+                    value = recoveryLabel,
+                    accentColor = recoveryColor
+                )
+            } else {
+                TrendRow(
+                    label = "Heart Rate",
+                    value = "Unavailable — sensing off",
+                    accentColor = FitLensPalette.ZincMuted
+                )
             }
-            val recoveryColor = when {
-                hrRecovery > 30 -> FitLensPalette.Emerald
-                hrRecovery > 15 -> FitLensPalette.Lime
-                hrRecovery > 5 -> FitLensPalette.Amber
-                else -> FitLensPalette.Rose
-            }
-            TrendRow(
-                label = "HR Recovery",
-                value = recoveryLabel,
-                accentColor = recoveryColor
-            )
 
             // Extended rest info
             if (session.extendedRestSeconds > 0) {
@@ -350,11 +366,16 @@ private fun AiCoachingCard(session: WorkoutSessionEntity) {
                 )
 
                 // Exertion score badge
-                val exertionScore = when {
-                    session.averageHeartRate > 160 -> 9
-                    session.averageHeartRate > 140 -> 7
-                    session.averageHeartRate > 120 -> 5
-                    else -> 3
+                val hasHeartRate = session.averageHeartRate.isFinite() && session.averageHeartRate > 0.0
+                val exertionScore = if (!hasHeartRate) {
+                    null
+                } else {
+                    when {
+                        session.averageHeartRate > 160 -> 9
+                        session.averageHeartRate > 140 -> 7
+                        session.averageHeartRate > 120 -> 5
+                        else -> 3
+                    }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -371,7 +392,7 @@ private fun AiCoachingCard(session: WorkoutSessionEntity) {
                         color = FitLensPalette.Lime.copy(alpha = 0.15f)
                     ) {
                         Text(
-                            text = "$exertionScore / 10",
+                            text = exertionScore?.let { "$it / 10" } ?: "N/A",
                             color = FitLensPalette.Lime,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,

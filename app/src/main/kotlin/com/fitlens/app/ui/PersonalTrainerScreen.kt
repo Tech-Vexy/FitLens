@@ -176,7 +176,7 @@ fun PersonalTrainerScreen(
                     .alpha(0.01f)
                 CameraFeedDisplayMode.PIP_RIGHT -> Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 64.dp, end = 16.dp)
+                    .padding(top = 76.dp, end = 16.dp)
                     .size(width = 104.dp, height = 144.dp)
                     .zIndex(10f)
                 CameraFeedDisplayMode.EXPANDED -> Modifier
@@ -278,6 +278,7 @@ fun PersonalTrainerScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .padding(end = if (cameraDisplayMode == CameraFeedDisplayMode.PIP_RIGHT) 120.dp else 0.dp)
             ) {
                 AnimatedContent(
                     targetState = activeTab,
@@ -531,13 +532,13 @@ private fun PermissionPromptCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (!hasConsent) "Enable Vitals & Pose Sensing" else "Camera Permission Needed",
+                    text = if (!hasConsent) "Enable Vitals Sensing" else "Camera Permission Needed",
                     color = TEXT_PRIMARY,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Contactless heart rate, breathing & rep counting.",
+                    text = "Contactless heart rate, breathing & readiness cues.",
                     color = TEXT_SECONDARY,
                     fontSize = 12.sp
                 )
@@ -1450,7 +1451,8 @@ private fun VitalsTabContent(
                                 )
                             }
                             Text(
-                                text = "${session.completedReps} reps • ${session.averageHeartRate.roundToInt()} BPM",
+                                text = "${session.completedReps} reps" +
+                                    if (session.averageHeartRate > 0.0) " • ${session.averageHeartRate.roundToInt()} BPM" else "",
                                 color = ACCENT_LIME,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold

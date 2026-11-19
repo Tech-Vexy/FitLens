@@ -26,7 +26,7 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sessions ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getRecentSessions(limit: Int): List<WorkoutSessionEntity>
 
-    @Query("SELECT AVG(formAccuracyPercentage) FROM workout_sessions")
+    @Query("SELECT AVG(formAccuracyPercentage) FROM workout_sessions WHERE formAccuracyPercentage >= 0")
     suspend fun getOverallAverageAccuracy(): Float?
 
     @Query("SELECT COUNT(*) FROM workout_sessions")

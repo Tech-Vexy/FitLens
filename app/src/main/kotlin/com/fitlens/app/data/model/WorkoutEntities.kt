@@ -24,7 +24,13 @@ data class WorkoutSessionEntity(
     val totalFormDeviations: Int,
     val extendedRestSeconds: Int = 0,
     val coachFeedback: String
-)
+) {
+    companion object {
+        const val HEART_RATE_UNAVAILABLE = 0.0
+        const val FORM_ACCURACY_UNMEASURED = -1f
+        const val FORM_DEVIATIONS_UNMEASURED = -1
+    }
+}
 
 /**
  * Local SQLite table for high-resolution physiological vitals time-series.

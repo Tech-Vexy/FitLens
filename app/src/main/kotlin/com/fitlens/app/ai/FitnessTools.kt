@@ -16,8 +16,7 @@ data class WorkoutPlanResult(
 
 data class SessionAnalysisResult(
     val summary: String,
-    val exertionScore: Int,
-    val formAccuracyPercentage: Float,
+    val exertionScore: Int?,
     val recommendation: String
 )
 
@@ -98,25 +97,36 @@ class FitnessTools {
         )
     }
 
-    @Tool(description = "Analyzes an active or completed workout session using biomechanical deviations and average heart rate.")
+    @Tool(description = "Analyzes an active or completed workout session using duration and average heart rate when available.")
     fun analyzeSession(
         @Param(description = "Total elapsed session duration in seconds") sessionDurationSeconds: Int,
-        @Param(description = "Average heart rate recorded via Presage rPPG in BPM") averageHeartRateBpm: Double,
-        @Param(description = "Total count of critical form deviations detected by MediaPipe") formDeviations: Int
+        @Param(description = "Average heart rate recorded via Presage rPPG in BPM; 0 means unavailable") averageHeartRateBpm: Double
     ): SessionAnalysisResult {
-        val accuracy = maxOf(0f, 100f - (formDeviations * 3.5f))
-        val exertion = when {
-            averageHeartRateBpm > 160 -> 9
-            averageHeartRateBpm > 140 -> 7
-            averageHeartRateBpm > 120 -> 5
-            else -> 3
+        val hasHeartRate = averageHeartRateBpm.isFinite() && averageHeartRateBpm > 0.0
+        val exertion = if (!hasHeartRate) {
+            null
+        } else {
+            when {
+                averageHeartRateBpm > 160 -> 9
+                averageHeartRateBpm > 140 -> 7
+                averageHeartRateBpm > 120 -> 5
+                else -> 3
+            }
         }
 
         return SessionAnalysisResult(
-            summary = "Session completed in ${sessionDurationSeconds / 60}m with ${accuracy.toInt()}% form accuracy.",
+            summary = if (hasHeartRate) {
+                "Session completed in ${sessionDurationSeconds / 60}m with average HR ${averageHeartRateBpm.toInt()} BPM."
+            } else {
+                "Session completed in ${sessionDurationSeconds / 60}m. Heart-rate data was unavailable."
+            },
             exertionScore = exertion,
-            formAccuracyPercentage = accuracy,
-            recommendation = if (accuracy < 80) "Focus on hip alignment and knee stability in next session." else "Form was consistent. Progressive overload recommended."
+            recommendation = when {
+                !hasHeartRate -> "Enable camera sensing for heart-rate context; otherwise use perceived effort and duration."
+                averageHeartRateBpm > 160 -> "Prioritize longer recovery and steady breathing before the next session."
+                averageHeartRateBpm > 140 -> "Keep hydration and pacing steady; consider slightly longer rests."
+                else -> "Effort was controlled. Repeat the plan or add a small progression."
+            }
         )
     }
 

@@ -23,8 +23,8 @@ class WorkoutRepository(private val workoutDao: WorkoutDao) {
         return workoutDao.getRecentSessions(limit)
     }
 
-    suspend fun getAverageAccuracy(): Float {
-        return workoutDao.getOverallAverageAccuracy() ?: 100f
+    suspend fun getAverageAccuracy(): Float? {
+        return workoutDao.getOverallAverageAccuracy()
     }
 
     suspend fun getTotalWorkouts(): Int {
