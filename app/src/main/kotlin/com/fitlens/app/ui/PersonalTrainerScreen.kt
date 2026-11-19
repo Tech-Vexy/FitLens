@@ -1184,6 +1184,7 @@ private fun WorkoutStatRow(
     }
 }
 
+@Composable
 private fun SelectorRow(
     options: List<String>,
     selected: String,
