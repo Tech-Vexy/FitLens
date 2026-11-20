@@ -49,7 +49,7 @@ fun WorkoutSummaryScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(FitLensPalette.Obsidian, Color(0xFF0D0D12), FitLensPalette.Obsidian)
+                    listOf(FitLensPalette.Obsidian, FitLensPalette.Card, FitLensPalette.Obsidian)
                 )
             )
     ) {

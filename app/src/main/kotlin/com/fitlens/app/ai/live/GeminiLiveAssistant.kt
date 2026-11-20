@@ -67,7 +67,7 @@ class GeminiLiveAssistant(
 ) {
     companion object {
         private const val TAG = "GeminiLiveAssistant"
-        const val LIVE_MODEL_NAME = "gemini-3.8-live"
+        const val LIVE_MODEL_NAME = "gemini-3.1-flash-live-preview"
 
         const val TRAINER_SYSTEM_INSTRUCTION = """
             You are FitLens, a perceptive, emotionally intelligent Personal AI Trainer & Wellness Companion.
@@ -100,7 +100,7 @@ class GeminiLiveAssistant(
             modelName = LIVE_MODEL_NAME,
             generationConfig = liveGenerationConfig {
                 responseModality = ResponseModality.AUDIO
-                speechConfig = SpeechConfig(voice = Voice("AOEDE"))
+                speechConfig = SpeechConfig(voice = Voice("Aoede"))
                 inputAudioTranscription = AudioTranscriptionConfig()
                 outputAudioTranscription = AudioTranscriptionConfig()
             },

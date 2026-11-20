@@ -8,6 +8,14 @@ import com.fitlens.app.ai.firebase.FirebaseAiService
  */
 enum class AdkAuthMode {
     /**
+     * Hybrid Inference: Best-in-class orchestration combining Cloud Firebase AI Logic
+     * (Gemini 3.8 Flash) for high-level generative reasoning, plan generation, and multimodal
+     * media cues, with deterministic sub-10ms On-Device Edge (Gemini Nano / LocalEdgeEngine)
+     * for real-time safety, adaptive rest, and offline resilience.
+     */
+    HYBRID_INFERENCE,
+
+    /**
      * Firebase AI Logic + Firebase App Check (Production Android App).
      * Attested by Play Integrity. Zero API keys in APK or client code.
      */
@@ -53,6 +61,28 @@ data class EdgeGeminiNanoAdapter(
 
     suspend fun generate(prompt: String, tools: List<Any> = emptyList()): String =
         engine.generate(tools, prompt)
+}
+
+/**
+ * Hybrid model adapter combining Cloud Firebase AI Logic with On-Device Edge.
+ * Dispatches generative reasoning to Firebase AI Logic while retaining instant
+ * on-device deterministic fallback and local safety evaluation.
+ */
+data class HybridGeminiAdapter(
+    val cloudAdapter: FirebaseGeminiAdapter = FirebaseGeminiAdapter(),
+    val edgeAdapter: EdgeGeminiNanoAdapter = EdgeGeminiNanoAdapter()
+) : AdkModelAdapter {
+    override val modelName: String = "hybrid(gemini-3.8-flash + gemini-nano-v2)"
+    override val authMode: AdkAuthMode = AdkAuthMode.HYBRID_INFERENCE
+
+    suspend fun generate(prompt: String, tools: List<Any> = emptyList()): String {
+        return runCatching {
+            cloudAdapter.generate(prompt)
+        }.getOrElse { e ->
+            Log.w("HybridGeminiAdapter", "Cloud Firebase AI Logic unavailable (${e.message}), executing via Edge Nano.")
+            edgeAdapter.generate(prompt, tools)
+        }
+    }
 }
 
 data class AdkInstruction(val text: String)
@@ -102,6 +132,9 @@ class AdkInMemoryRunner(
         Log.d(TAG, "Executing agent prompt via ${agent.model.authMode}: $prompt")
 
         val response = when (val currentModel = agent.model) {
+            is HybridGeminiAdapter -> {
+                currentModel.generate(prompt, agent.tools)
+            }
             is FirebaseGeminiAdapter -> {
                 runCatching {
                     currentModel.generate(prompt)

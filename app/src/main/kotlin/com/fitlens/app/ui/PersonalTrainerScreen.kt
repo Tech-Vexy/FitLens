@@ -87,22 +87,24 @@ import com.presagetech.smartspectra.ProcessingStatus
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
+import androidx.compose.runtime.ReadOnlyComposable
+import com.fitlens.app.ai.media.ExerciseMediaPack
 import java.util.Locale
 import kotlin.math.roundToInt
 
-// Cohesive Modern Obsidian + Athletic Lime / Emerald Palette (FitLensPalette)
-private val BG_OBSIDIAN = FitLensPalette.Obsidian
-private val SURFACE_CARD = FitLensPalette.Card
-private val SURFACE_ELEVATED = FitLensPalette.Elevated
-private val BORDER_ZINC = FitLensPalette.Border
-private val ACCENT_LIME = FitLensPalette.Lime
-private val ACCENT_EMERALD = FitLensPalette.Emerald
-private val ACCENT_ROSE = FitLensPalette.Rose
-private val ACCENT_SKY = FitLensPalette.Sky
-private val ACCENT_AMBER = FitLensPalette.Amber
-private val TEXT_PRIMARY = FitLensPalette.White
-private val TEXT_SECONDARY = FitLensPalette.Zinc
-private val TEXT_MUTED = FitLensPalette.ZincMuted
+// Cohesive Modern Obsidian + Athletic Lime / Emerald Palette automatically adapting to Light / Dark mode
+private val BG_OBSIDIAN: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.background
+private val SURFACE_CARD: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.card
+private val SURFACE_ELEVATED: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.elevated
+private val BORDER_ZINC: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.border
+private val ACCENT_LIME: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.lime
+private val ACCENT_EMERALD: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.emerald
+private val ACCENT_ROSE: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.rose
+private val ACCENT_SKY: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.sky
+private val ACCENT_AMBER: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.amber
+private val TEXT_PRIMARY: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textPrimary
+private val TEXT_SECONDARY: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textSecondary
+private val TEXT_MUTED: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textMuted
 
 private enum class FitLensTab(val label: String) {
     TRAIN("Train"),
@@ -127,8 +129,12 @@ fun PersonalTrainerScreen(
     workoutState: WorkoutState,
     generatedPlan: WorkoutPlanResult,
     isGeneratingPlan: Boolean,
+    workoutMediaPacks: Map<String, ExerciseMediaPack> = emptyMap(),
+    generationStatusMessage: String? = null,
     recentSessions: List<WorkoutSessionEntity>,
     onSelectExercise: (String) -> Unit,
+    onEnsureMediaForExercise: ((String) -> ExerciseMediaPack)? = null,
+    onSpeakNarration: ((String) -> Unit)? = null,
     onGenerateWorkoutPlan: (String, String, String, Int) -> Unit,
     onStartGeneratedRoutine: (WorkoutPlanResult) -> Unit,
     onIncrementRep: () -> Unit,
@@ -160,7 +166,7 @@ fun PersonalTrainerScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(BG_OBSIDIAN, Color(0xFF0D0D12), BG_OBSIDIAN)
+                    listOf(BG_OBSIDIAN, SURFACE_ELEVATED, BG_OBSIDIAN)
                 )
             )
             .statusBarsPadding()
@@ -297,10 +303,15 @@ fun PersonalTrainerScreen(
                         generatedPlan = generatedPlan,
                         aiCoachingPrompt = aiCoachingPrompt,
                         isGeneratingPlan = isGeneratingPlan,
+                        preferLocalEdgeAi = profile.preferLocalEdgeAi,
+                        workoutMediaPacks = workoutMediaPacks,
+                        generationStatusMessage = generationStatusMessage,
                         showCustomizePlan = showCustomizePlan,
                         recentSessions = recentSessions,
                         onToggleCustomizePlan = { showCustomizePlan = !showCustomizePlan },
                         onSelectExercise = onSelectExercise,
+                        onEnsureMediaForExercise = onEnsureMediaForExercise,
+                        onSpeakNarration = onSpeakNarration,
                         onGenerateWorkoutPlan = onGenerateWorkoutPlan,
                         onStartGeneratedRoutine = onStartGeneratedRoutine,
                         onIncrementRep = onIncrementRep,
@@ -570,10 +581,15 @@ private fun TrainTabContent(
     generatedPlan: WorkoutPlanResult,
     aiCoachingPrompt: String?,
     isGeneratingPlan: Boolean,
+    preferLocalEdgeAi: Boolean = false,
+    workoutMediaPacks: Map<String, ExerciseMediaPack> = emptyMap(),
+    generationStatusMessage: String? = null,
     showCustomizePlan: Boolean,
     recentSessions: List<WorkoutSessionEntity>,
     onToggleCustomizePlan: () -> Unit,
     onSelectExercise: (String) -> Unit,
+    onEnsureMediaForExercise: ((String) -> ExerciseMediaPack)? = null,
+    onSpeakNarration: ((String) -> Unit)? = null,
     onGenerateWorkoutPlan: (String, String, String, Int) -> Unit,
     onStartGeneratedRoutine: (WorkoutPlanResult) -> Unit,
     onIncrementRep: () -> Unit,
@@ -613,9 +629,17 @@ private fun TrainTabContent(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (isWorkoutActive) {
+                val currentMedia = workoutMediaPacks[workoutState.exerciseName]
+                LaunchedEffect(workoutState.exerciseName, currentMedia == null) {
+                    if (currentMedia == null) {
+                        onEnsureMediaForExercise?.invoke(workoutState.exerciseName)
+                    }
+                }
                 ActiveWorkoutPlayerSection(
                     workoutState = workoutState,
                     aiCoachingPrompt = aiCoachingPrompt,
+                    mediaPack = currentMedia,
+                    onSpeakNarration = onSpeakNarration,
                     onIncrementRep = onIncrementRep,
                     onCompleteSet = onCompleteSet,
                     onSkipPhase = onSkipPhase,
@@ -627,6 +651,93 @@ private fun TrainTabContent(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Hybrid Inference & Procedure Media Ready Badge
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = ACCENT_LIME.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, ACCENT_LIME.copy(alpha = 0.35f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = ACCENT_LIME,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = if (preferLocalEdgeAi) {
+                                    "ON-DEVICE EDGE AI"
+                                } else {
+                                    "HYBRID INFERENCE • FIREBASE AI LOGIC"
+                                },
+                                color = ACCENT_LIME,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = ACCENT_SKY.copy(alpha = 0.18f)
+                        ) {
+                            Text(
+                                text = "NANOBANANA + OMNI",
+                                color = ACCENT_SKY,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                // AI Generation In-Progress Banner
+                if (isGeneratingPlan || generationStatusMessage != null) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = ACCENT_LIME.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, ACCENT_LIME.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = ACCENT_LIME,
+                                strokeWidth = 2.5.dp
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "SYNTHESIZING WORKOUT MEDIA",
+                                    color = ACCENT_LIME,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = generationStatusMessage ?: "Hybrid AI generating procedure graphics & interactive walkthroughs...",
+                                    color = TEXT_PRIMARY,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
                 // 1. Program header: DAY eyebrow, title, FAQ pill
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
@@ -1034,16 +1145,45 @@ private fun TrainTabContent(
     }
 
     detailExercise?.let { name ->
-        ExerciseDetailSheet(exerciseName = name, onDismiss = { detailExercise = null })
+        val media = workoutMediaPacks[name]
+        LaunchedEffect(name, media == null) {
+            if (media == null) {
+                onEnsureMediaForExercise?.invoke(name)
+            }
+        }
+        ExerciseDetailSheet(
+            exerciseName = name,
+            mediaPack = media,
+            onSpeakNarration = onSpeakNarration,
+            onDismiss = { detailExercise = null }
+        )
     }
+}
+
+private enum class ExerciseDetailTab(val label: String) {
+    WALKTHROUGH("Walkthrough Demo"),
+    PROCEDURES("Procedure Steps"),
+    CHECKLIST("Form Checklist")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExerciseDetailSheet(
     exerciseName: String,
+    mediaPack: ExerciseMediaPack? = null,
+    onSpeakNarration: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
+    var selectedTab by remember {
+        mutableStateOf(if (mediaPack != null) ExerciseDetailTab.WALKTHROUGH else ExerciseDetailTab.CHECKLIST)
+    }
+    var mediaArrived by remember { mutableStateOf(mediaPack != null) }
+    LaunchedEffect(mediaPack != null) {
+        if (!mediaArrived && mediaPack != null) {
+            mediaArrived = true
+            selectedTab = ExerciseDetailTab.WALKTHROUGH
+        }
+    }
     val meta = getExerciseCoachingMeta(exerciseName)
     val isHold = exerciseName.contains("Plank", ignoreCase = true)
 
@@ -1054,76 +1194,146 @@ private fun ExerciseDetailSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                ExerciseGlyphBadge(exerciseName = exerciseName, modifier = Modifier.size(48.dp))
-                Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ExerciseGlyphBadge(exerciseName = exerciseName, modifier = Modifier.size(44.dp))
+                    Column {
+                        Text(
+                            text = "AI PROCEDURE & DEMO",
+                            color = ACCENT_LIME,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = exerciseName,
+                            color = TEXT_PRIMARY,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TEXT_MUTED)
+                }
+            }
+
+            // Tab bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ExerciseDetailTab.values().forEach { tab ->
+                    val isSelected = selectedTab == tab
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) ACCENT_LIME.copy(alpha = 0.18f) else SURFACE_ELEVATED,
+                        border = BorderStroke(1.dp, if (isSelected) ACCENT_LIME else BORDER_ZINC),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { selectedTab = tab }
+                    ) {
+                        Text(
+                            text = tab.label,
+                            color = if (isSelected) ACCENT_LIME else TEXT_SECONDARY,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            when (selectedTab) {
+                ExerciseDetailTab.WALKTHROUGH -> {
+                    if (mediaPack != null) {
+                        GeminiOmniVideoWalkthroughPlayer(
+                            walkthrough = mediaPack.videoWalkthrough,
+                            exerciseName = exerciseName,
+                            mediaSource = mediaPack.mediaSource,
+                            onSpeakNarration = onSpeakNarration
+                        )
+                    } else {
+                        AnimatedExerciseIllustration(
+                            exerciseName = exerciseName,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(165.dp)
+                        )
+                    }
+                }
+                ExerciseDetailTab.PROCEDURES -> {
+                    if (mediaPack != null) {
+                        NanobananaProcedureCard(mediaPack = mediaPack)
+                    } else {
+                        AnimatedExerciseIllustration(
+                            exerciseName = exerciseName,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(165.dp)
+                        )
+                    }
+                }
+                ExerciseDetailTab.CHECKLIST -> {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = SURFACE_ELEVATED
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("TARGET", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text(meta.targetMuscles, color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("TEMPO", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text(meta.tempoCue, color = ACCENT_LIME, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("SETS × REPS", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text(if (isHold) "3 × 30s" else "3 × 12", color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
                     Text(
-                        text = "EXERCISE",
+                        text = "FORM CHECKLIST",
                         color = TEXT_MUTED,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp
                     )
-                    Text(
-                        text = exerciseName,
-                        color = TEXT_PRIMARY,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = SURFACE_ELEVATED
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text("TARGET", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                        Text(meta.targetMuscles, color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    meta.formChecklist.forEach { cue ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = ACCENT_EMERALD,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(cue, color = TEXT_SECONDARY, fontSize = 13.sp)
+                        }
                     }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("TEMPO", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                        Text(meta.tempoCue, color = ACCENT_LIME, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("SETS × REPS", color = TEXT_MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                        Text(if (isHold) "3 × 30s" else "3 × 12", color = TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-
-            Text(
-                text = "FORM CHECKLIST",
-                color = TEXT_MUTED,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
-            )
-            meta.formChecklist.forEach { cue ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        tint = ACCENT_EMERALD,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(cue, color = TEXT_SECONDARY, fontSize = 13.sp)
                 }
             }
         }
@@ -1630,6 +1840,9 @@ private fun WaveformTraceCanvas(
     breathTrace: List<Float>,
     modifier: Modifier = Modifier
 ) {
+    val breathColor = ACCENT_SKY.copy(alpha = 0.6f)
+    val pulseColor = ACCENT_ROSE
+
     Canvas(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
@@ -1664,8 +1877,8 @@ private fun WaveformTraceCanvas(
             )
         }
 
-        drawSignal(breathTrace.takeLast(64), ACCENT_SKY.copy(alpha = 0.6f))
-        drawSignal(pulseTrace.takeLast(64), ACCENT_ROSE)
+        drawSignal(breathTrace.takeLast(64), breathColor)
+        drawSignal(pulseTrace.takeLast(64), pulseColor)
     }
 }
 

@@ -20,7 +20,8 @@ data class UserProfile(
     val experienceLevel: String = "Intermediate",
     val hasAcceptedSensingConsent: Boolean = false,
     val smartSpectraTelemetryEnabled: Boolean = true,
-    val preferLocalEdgeAi: Boolean = false
+    val preferLocalEdgeAi: Boolean = false,
+    val themePreference: String = "SYSTEM" // "SYSTEM", "LIGHT", "DARK"
 ) {
     /**
      * Calculates personalized heart rate zones using the Karvonen Heart Rate Reserve (HRR) formula:
@@ -74,6 +75,7 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_SENSING_CONSENT = booleanPreferencesKey("has_accepted_sensing_consent")
         val KEY_SMARTSPECTRA_TELEMETRY = booleanPreferencesKey("smartspectra_telemetry_enabled")
         val KEY_PREFER_LOCAL_EDGE_AI = booleanPreferencesKey("prefer_local_edge_ai")
+        val KEY_THEME_PREFERENCE = stringPreferencesKey("theme_preference")
     }
 
     val userProfileFlow: Flow<UserProfile> = context.dataStore.data.map { prefs ->
@@ -90,7 +92,10 @@ class UserPreferencesRepository(private val context: Context) {
             experienceLevel = prefs[KEY_EXPERIENCE] ?: "Intermediate",
             hasAcceptedSensingConsent = prefs[KEY_SENSING_CONSENT] ?: false,
             smartSpectraTelemetryEnabled = prefs[KEY_SMARTSPECTRA_TELEMETRY] ?: true,
-            preferLocalEdgeAi = prefs[KEY_PREFER_LOCAL_EDGE_AI] ?: false
+            preferLocalEdgeAi = prefs[KEY_PREFER_LOCAL_EDGE_AI] ?: false,
+            themePreference = prefs[KEY_THEME_PREFERENCE]
+                ?.takeIf { it in setOf("SYSTEM", "LIGHT", "DARK") }
+                ?: "SYSTEM"
         )
     }
 
@@ -105,6 +110,7 @@ class UserPreferencesRepository(private val context: Context) {
             prefs[KEY_SENSING_CONSENT] = profile.hasAcceptedSensingConsent
             prefs[KEY_SMARTSPECTRA_TELEMETRY] = profile.smartSpectraTelemetryEnabled
             prefs[KEY_PREFER_LOCAL_EDGE_AI] = profile.preferLocalEdgeAi
+            prefs[KEY_THEME_PREFERENCE] = profile.themePreference
         }
     }
 

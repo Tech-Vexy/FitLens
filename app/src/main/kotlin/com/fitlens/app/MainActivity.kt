@@ -104,7 +104,13 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            FitLensTheme {
+            val userProfile by workoutViewModel.userProfile.collectAsState()
+            val isDark = when (userProfile.themePreference) {
+                "LIGHT" -> false
+                "DARK" -> true
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+            FitLensTheme(darkTheme = isDark) {
                 FitLensNavHost()
             }
         }
@@ -243,6 +249,8 @@ class MainActivity : ComponentActivity() {
         val smokeTestResult by viewModel.smokeTestResult.collectAsState()
         val isRunningSmokeTest by viewModel.isRunningSmokeTest.collectAsState()
         val isSensingActive by viewModel.isSensingActive.collectAsState()
+        val workoutMediaPacks by viewModel.workoutMediaPacks.collectAsState()
+        val generationStatusMessage by viewModel.generationStatusMessage.collectAsState()
         val hasCameraPerm by hasCameraPermissionState
 
         var useFrontCamera by remember { mutableStateOf(true) }
@@ -338,8 +346,12 @@ class MainActivity : ComponentActivity() {
             workoutState = workoutState,
             generatedPlan = generatedPlan,
             isGeneratingPlan = isGeneratingPlan,
+            workoutMediaPacks = workoutMediaPacks,
+            generationStatusMessage = generationStatusMessage,
             recentSessions = recentSessions,
             onSelectExercise = { exercise -> viewModel.selectExercise(exercise) },
+            onEnsureMediaForExercise = { exercise -> viewModel.ensureMediaForExercise(exercise) },
+            onSpeakNarration = { cue -> viewModel.speakNarration(cue) },
             onGenerateWorkoutPlan = { goal, exp, equip, duration ->
                 viewModel.generateAiWorkoutPlan(goal, exp, equip, duration)
             },

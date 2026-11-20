@@ -53,16 +53,19 @@ import com.fitlens.app.workout.WorkoutState
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-// Colors sourced from FitLensPalette in FitLensTheme.kt
-private val PLAYER_CARD_BG = FitLensPalette.Card
-private val PLAYER_STAGE_BG = FitLensPalette.ElevatedAlt
-private val PLAYER_BORDER = FitLensPalette.Border
-private val ACCENT_LIME = FitLensPalette.Lime
-private val ACCENT_EMERALD = FitLensPalette.Emerald
-private val ACCENT_ROSE = FitLensPalette.Rose
-private val ACCENT_SKY = FitLensPalette.Sky
-private val TEXT_WHITE = FitLensPalette.White
-private val TEXT_ZINC = FitLensPalette.Zinc
+import androidx.compose.runtime.ReadOnlyComposable
+import com.fitlens.app.ai.media.ExerciseMediaPack
+
+// Colors dynamically adapting to automatic light and dark mode theming
+private val PLAYER_CARD_BG: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.card
+private val PLAYER_STAGE_BG: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.elevatedAlt
+private val PLAYER_BORDER: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.border
+private val ACCENT_LIME: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.lime
+private val ACCENT_EMERALD: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.emerald
+private val ACCENT_ROSE: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.rose
+private val ACCENT_SKY: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.sky
+private val TEXT_WHITE: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textPrimary
+private val TEXT_ZINC: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textSecondary
 
 /**
  * Controls how the camera feed is displayed.
@@ -249,6 +252,11 @@ fun AnimatedExerciseIllustration(
                 )
             }
 
+            val boneColor = FitLensPalette.ZincMuted
+            val activeMuscleColor = ACCENT_LIME
+            val jointColor = ACCENT_EMERALD
+            val headColor = TEXT_WHITE
+
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
@@ -267,9 +275,6 @@ fun AnimatedExerciseIllustration(
                     cap = StrokeCap.Round
                 )
 
-                val boneColor = FitLensPalette.ZincMuted
-                val activeMuscleColor = ACCENT_LIME
-                val jointColor = ACCENT_EMERALD
                 val strokeW = 9f
 
                 fun bone(a: Offset, b: Offset, highlight: Boolean = false) {
@@ -313,7 +318,7 @@ fun AnimatedExerciseIllustration(
                         bone(hip, shoulder, highlight = true)
                         bone(shoulder, elbow)
                         bone(elbow, wrist)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(ankle); joint(knee); joint(hip, 8f, true); joint(shoulder, 8f, true); joint(elbow)
                     }
 
@@ -330,7 +335,7 @@ fun AnimatedExerciseIllustration(
                         bone(shoulder, elbow)
                         bone(hip, knee, highlight = true)
                         bone(knee, ankle)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(hip, 8f, true); joint(shoulder, 8f, true); joint(knee); joint(ankle)
                     }
 
@@ -347,7 +352,7 @@ fun AnimatedExerciseIllustration(
                         bone(hip, shoulder, highlight = true)
                         bone(shoulder, elbow, highlight = true)
                         bone(elbow, wrist, highlight = true)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(ankle); joint(hip); joint(shoulder, 8f, true); joint(elbow, 8f, true); joint(wrist)
                     }
 
@@ -366,7 +371,7 @@ fun AnimatedExerciseIllustration(
                         bone(hip, shoulder, highlight = true)
                         bone(shoulder, lWrist)
                         bone(shoulder, rWrist)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(hip, 8f, true); joint(shoulder, 8f, true); joint(lAnkle); joint(rAnkle)
                     }
 
@@ -395,7 +400,7 @@ fun AnimatedExerciseIllustration(
                         bone(lElbow, lWrist)
                         bone(shoulder, rElbow)
                         bone(rElbow, rWrist)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(hip, 8f, true); joint(frontKnee, 8f, true); joint(shoulder, 8f, true)
                     }
 
@@ -419,7 +424,7 @@ fun AnimatedExerciseIllustration(
                         bone(elbow, wrist, highlight = true)
                         bone(shoulder, secondElbow)
                         bone(secondElbow, secondWrist)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(shoulder, 8f, true); joint(elbow, 8f, true); joint(hip)
                     }
 
@@ -436,7 +441,7 @@ fun AnimatedExerciseIllustration(
                         bone(knee, hip, highlight = true)
                         bone(hip, shoulder, highlight = true)
                         bone(shoulder, wrist)
-                        drawCircle(color = TEXT_WHITE, radius = 13f, center = head)
+                        drawCircle(color = headColor, radius = 13f, center = head)
                         joint(ankle); joint(knee, 8f, true); joint(hip, 8f, true); joint(shoulder)
                     }
                 }
@@ -452,16 +457,27 @@ fun AnimatedExerciseIllustration(
     }
 }
 
+enum class ActiveVisualMode(val label: String) {
+    WALKTHROUGH("Walkthrough"),
+    PROCEDURES("Procedures"),
+    HUD("Pose HUD")
+}
+
 @Composable
 fun ActiveWorkoutPlayerSection(
     workoutState: WorkoutState,
     aiCoachingPrompt: String?,
+    mediaPack: ExerciseMediaPack? = null,
+    onSpeakNarration: ((String) -> Unit)? = null,
     onIncrementRep: () -> Unit,
     onCompleteSet: () -> Unit,
     onSkipPhase: () -> Unit,
     onStopWorkout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var visualMode by remember(mediaPack?.exerciseName) {
+        mutableStateOf(if (mediaPack != null) ActiveVisualMode.WALKTHROUGH else ActiveVisualMode.HUD)
+    }
     val totalRoutineCount = maxOf(1, workoutState.routineExercises.size)
     val currentExerciseNum = workoutState.currentExerciseIndex + 1
 
@@ -627,6 +643,35 @@ fun ActiveWorkoutPlayerSection(
                 }
             }
 
+            // Visual Mode Selector (Gemini Omni Walkthrough, Nanobanana Procedures, Pose HUD)
+            if (mediaPack != null && workoutState.phase != WorkoutPhase.REST_INTERVAL && workoutState.phase != WorkoutPhase.COOLDOWN) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ActiveVisualMode.values().forEach { mode ->
+                        val isSelected = visualMode == mode
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) ACCENT_LIME.copy(alpha = 0.18f) else PLAYER_STAGE_BG,
+                            border = BorderStroke(1.dp, if (isSelected) ACCENT_LIME else PLAYER_BORDER),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { visualMode = mode }
+                        ) {
+                            Text(
+                                text = mode.label,
+                                color = if (isSelected) ACCENT_LIME else TEXT_ZINC,
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             when (workoutState.phase) {
                 WorkoutPhase.REST_INTERVAL, WorkoutPhase.COOLDOWN -> {
                     SmartSpectraRecoveryStage(
@@ -635,12 +680,23 @@ fun ActiveWorkoutPlayerSection(
                     )
                 }
                 WorkoutPhase.WARMUP -> {
-                    AnimatedExerciseIllustration(
-                        exerciseName = workoutState.exerciseName,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp)
-                    )
+                    if (mediaPack != null && visualMode == ActiveVisualMode.WALKTHROUGH) {
+                        GeminiOmniVideoWalkthroughPlayer(
+                            walkthrough = mediaPack.videoWalkthrough,
+                            exerciseName = workoutState.exerciseName,
+                            mediaSource = mediaPack.mediaSource,
+                            onSpeakNarration = onSpeakNarration
+                        )
+                    } else if (mediaPack != null && visualMode == ActiveVisualMode.PROCEDURES) {
+                        NanobananaProcedureCard(mediaPack = mediaPack)
+                    } else {
+                        AnimatedExerciseIllustration(
+                            exerciseName = workoutState.exerciseName,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -664,12 +720,23 @@ fun ActiveWorkoutPlayerSection(
                     }
                 }
                 else -> {
-                    AnimatedExerciseIllustration(
-                        exerciseName = workoutState.exerciseName,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(165.dp)
-                    )
+                    if (mediaPack != null && visualMode == ActiveVisualMode.WALKTHROUGH) {
+                        GeminiOmniVideoWalkthroughPlayer(
+                            walkthrough = mediaPack.videoWalkthrough,
+                            exerciseName = workoutState.exerciseName,
+                            mediaSource = mediaPack.mediaSource,
+                            onSpeakNarration = onSpeakNarration
+                        )
+                    } else if (mediaPack != null && visualMode == ActiveVisualMode.PROCEDURES) {
+                        NanobananaProcedureCard(mediaPack = mediaPack)
+                    } else {
+                        AnimatedExerciseIllustration(
+                            exerciseName = workoutState.exerciseName,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(165.dp)
+                        )
+                    }
 
                     val progress = (workoutState.completedReps.toFloat() / workoutState.targetReps.coerceAtLeast(1)).coerceIn(0f, 1f)
                     Row(
@@ -794,13 +861,15 @@ private fun SmartSpectraRecoveryStage(
                 modifier = Modifier.size(104.dp),
                 contentAlignment = Alignment.Center
             ) {
+                val ringTrackColor = ACCENT_EMERALD
+                val ringProgressColor = ACCENT_LIME
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     drawCircle(
-                        color = ACCENT_EMERALD.copy(alpha = 0.14f),
+                        color = ringTrackColor.copy(alpha = 0.14f),
                         radius = size.minDimension * 0.48f * ringScale
                     )
                     drawCircle(
-                        color = ACCENT_LIME,
+                        color = ringProgressColor,
                         radius = size.minDimension * 0.44f * ringScale,
                         style = Stroke(width = 4.5f)
                     )
@@ -866,6 +935,9 @@ fun ProgramArtwork(
         label = "art_drift"
     )
 
+    val backgroundElevated = FitLensPalette.Elevated
+    val backgroundCard = PLAYER_CARD_BG
+
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -873,7 +945,7 @@ fun ProgramArtwork(
 
         drawRect(
             brush = Brush.verticalGradient(
-                colors = listOf(FitLensPalette.Elevated, PLAYER_CARD_BG)
+                colors = listOf(backgroundElevated, backgroundCard)
             )
         )
 

@@ -7,9 +7,11 @@ import com.fitlens.app.ai.adk.AdkInstruction
 import com.fitlens.app.ai.adk.AdkLlmAgent
 import com.fitlens.app.ai.adk.EdgeGeminiNanoAdapter
 import com.fitlens.app.ai.adk.FirebaseGeminiAdapter
+import com.fitlens.app.ai.adk.HybridGeminiAdapter
 
 /**
  * FitnessCoachAgent encapsulates agent definition and execution orchestration using ADK Kotlin.
+ * Supports Hybrid Inference (Cloud Firebase AI Logic + Edge Gemini Nano).
  *
  * Privacy boundary: Biometric and physiological vitals (pulse, breathing rate, HRV, expressions,
  * skeletal landmarks) NEVER leave the device. Cloud prompts (when Firebase AI Logic is enabled)
@@ -17,13 +19,14 @@ import com.fitlens.app.ai.adk.FirebaseGeminiAdapter
  */
 class FitnessCoachAgent(
     private val tools: FitnessTools = FitnessTools(),
-    initialAuthMode: AdkAuthMode = AdkAuthMode.FIREBASE_AI_LOGIC
+    initialAuthMode: AdkAuthMode = AdkAuthMode.HYBRID_INFERENCE
 ) {
     companion object {
         private const val TAG = "FitnessCoachAgent"
         const val AGENT_NAME = "fitness_coach"
         const val MODEL_GEMINI_FLASH = "gemini-3.8-flash"
         const val MODEL_GEMINI_NANO = "gemini-nano-v2"
+        const val MODEL_HYBRID = "hybrid(gemini-3.8-flash + gemini-nano-v2)"
 
         const val SYSTEM_INSTRUCTION = """
             You are the FitLens Fitness and Wellness Coach built with Google ADK Kotlin.
@@ -44,8 +47,9 @@ class FitnessCoachAgent(
 
     private fun buildAgent(mode: AdkAuthMode): AdkLlmAgent = AdkLlmAgent(
         name = AGENT_NAME,
-        description = "Personalized fitness and biomechanics coach for FitLens.",
+        description = "Personalized fitness and biomechanics coach for FitLens with Hybrid Inference.",
         model = when (mode) {
+            AdkAuthMode.HYBRID_INFERENCE -> HybridGeminiAdapter()
             AdkAuthMode.FIREBASE_AI_LOGIC -> FirebaseGeminiAdapter(modelName = MODEL_GEMINI_FLASH)
             AdkAuthMode.ON_DEVICE_EDGE -> EdgeGeminiNanoAdapter(modelName = MODEL_GEMINI_NANO)
         },

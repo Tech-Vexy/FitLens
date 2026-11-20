@@ -1,6 +1,7 @@
 package com.fitlens.app.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,16 +22,18 @@ import com.fitlens.app.data.profile.UserProfile
 import com.fitlens.app.testing.SmokeTestGateResult
 import kotlin.math.roundToInt
 
-// Colors sourced from FitLensPalette in FitLensTheme.kt
-private val SHEET_BG = FitLensPalette.Obsidian
-private val SHEET_CARD = FitLensPalette.Card
-private val SHEET_ELEVATED = FitLensPalette.Elevated
-private val SHEET_BORDER = FitLensPalette.Border
-private val SHEET_LIME = FitLensPalette.Lime
-private val SHEET_EMERALD = FitLensPalette.Emerald
-private val SHEET_ROSE = FitLensPalette.Rose
-private val SHEET_WHITE = FitLensPalette.White
-private val SHEET_ZINC = FitLensPalette.Zinc
+import androidx.compose.runtime.ReadOnlyComposable
+
+// Colors dynamically adapting to automatic light and dark mode theming
+private val SHEET_BG: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.background
+private val SHEET_CARD: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.card
+private val SHEET_ELEVATED: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.elevated
+private val SHEET_BORDER: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.border
+private val SHEET_LIME: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.lime
+private val SHEET_EMERALD: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.emerald
+private val SHEET_ROSE: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.rose
+private val SHEET_WHITE: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textPrimary
+private val SHEET_ZINC: Color @Composable @ReadOnlyComposable get() = LocalFitLensColors.current.textSecondary
 
 @Composable
 fun SensingConsentDialog(
@@ -195,6 +198,9 @@ fun ProfileAndPrivacySheet(
     var consentAccepted by remember(profile.hasAcceptedSensingConsent) {
         mutableStateOf(profile.hasAcceptedSensingConsent)
     }
+    var themePreference by remember(profile.themePreference) {
+        mutableStateOf(profile.themePreference)
+    }
     var confirmDelete by remember { mutableStateOf(false) }
 
     val previewProfile = profile.copy(
@@ -204,7 +210,8 @@ fun ProfileAndPrivacySheet(
         maxHeartRate = maxOf((restingHr + 30f).toDouble(), maxHr.toDouble()),
         hasAcceptedSensingConsent = consentAccepted,
         smartSpectraTelemetryEnabled = telemetryEnabled,
-        preferLocalEdgeAi = preferLocalEdgeAi
+        preferLocalEdgeAi = preferLocalEdgeAi,
+        themePreference = themePreference
     )
 
     ModalBottomSheet(
@@ -301,6 +308,47 @@ fun ProfileAndPrivacySheet(
                     ) {
                         Text("Offline Edge AI Mode", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Switch(checked = preferLocalEdgeAi, onCheckedChange = { preferLocalEdgeAi = it })
+                    }
+                }
+            }
+
+            Surface(
+                color = SHEET_CARD,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, SHEET_BORDER)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Appearance", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("SYSTEM", "LIGHT", "DARK").forEach { option ->
+                            val selected = themePreference == option
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) SHEET_LIME.copy(alpha = 0.16f) else SHEET_ELEVATED,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) SHEET_LIME else SHEET_BORDER
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { themePreference = option }
+                            ) {
+                                Text(
+                                    text = option.replaceFirstChar { it.uppercase() },
+                                    color = if (selected) SHEET_LIME else SHEET_ZINC,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

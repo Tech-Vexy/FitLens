@@ -21,10 +21,12 @@ import com.fitlens.app.ui.FitLensPalette
 @Composable
 fun PulseWaveformView(
     waveformSamples: List<Float>,
-    lineColor: Color = FitLensPalette.Emerald,
+    lineColor: Color? = null,
     modifier: Modifier = Modifier
 ) {
     if (waveformSamples.isEmpty()) return
+
+    val resolvedLineColor = lineColor ?: FitLensPalette.Emerald
 
     Canvas(
         modifier = modifier
@@ -55,12 +57,12 @@ fun PulseWaveformView(
         // Draw glowing trace line
         drawPath(
             path = path,
-            color = lineColor.copy(alpha = 0.3f),
+            color = resolvedLineColor.copy(alpha = 0.3f),
             style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
         drawPath(
             path = path,
-            color = lineColor,
+            color = resolvedLineColor,
             style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }

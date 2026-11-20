@@ -9,6 +9,10 @@ import com.fitlens.app.ai.FitnessCoachAgent
 import com.fitlens.app.ai.FitnessTools
 import com.fitlens.app.ai.WorkoutPlanResult
 import com.fitlens.app.ai.adk.AdkAuthMode
+import com.fitlens.app.ai.media.ExerciseMediaPack
+import com.fitlens.app.ai.media.WorkoutMediaCloudGenerator
+import com.fitlens.app.ai.media.WorkoutMediaGenerator
+import com.fitlens.app.ai.media.WorkoutMediaSource
 import com.fitlens.app.ai.live.BiometricTrendTracker
 import com.fitlens.app.ai.live.GeminiLiveAssistant
 import com.fitlens.app.ai.live.LiveAssistantState
@@ -57,6 +61,9 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     // Biomechanics coach: deterministic workout state machine + on-device TTS cues.
     private val coachAgent = FitnessCoachAgent()
+    private val workoutMediaCloudGenerator = WorkoutMediaCloudGenerator()
+    private val workoutMediaPacksLock = Any()
+    private val mediaEnrichmentRequested = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     val workoutManager = WorkoutManager(coachAgent = coachAgent)
     private val audioCoach = FitLensAudioCoach(application)
     private val headlessVideoFeeder = HeadlessVideoFeeder(vitalsAnalyzer)
@@ -65,18 +72,29 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     val assistantState: StateFlow<LiveAssistantState> = liveAssistant.state
     val workoutState: StateFlow<WorkoutState> = workoutManager.state
 
-    private val _generatedWorkoutPlan = MutableStateFlow(
-        FitnessTools().generateWorkoutPlan(
-            goal = "Six-Pack Abs",
-            experience = "Intermediate",
-            equipment = "Bodyweight",
-            durationMinutes = 15
-        )
+    private val defaultWorkoutPlan = FitnessTools().generateWorkoutPlan(
+        goal = "Six-Pack Abs",
+        experience = "Intermediate",
+        equipment = "Bodyweight",
+        durationMinutes = 15
     )
+    private val _generatedWorkoutPlan = MutableStateFlow(defaultWorkoutPlan)
     val generatedWorkoutPlan: StateFlow<WorkoutPlanResult> = _generatedWorkoutPlan.asStateFlow()
 
     private val _isGeneratingPlan = MutableStateFlow(false)
     val isGeneratingPlan: StateFlow<Boolean> = _isGeneratingPlan.asStateFlow()
+
+    private val _generationStatusMessage = MutableStateFlow<String?>(null)
+    val generationStatusMessage: StateFlow<String?> = _generationStatusMessage.asStateFlow()
+
+    private val _workoutMediaPacks = MutableStateFlow<Map<String, ExerciseMediaPack>>(
+        WorkoutMediaGenerator.generateMediaForRoutine(
+            exercises = defaultWorkoutPlan.targetExercises,
+            goal = defaultWorkoutPlan.goal,
+            experienceLevel = "Intermediate"
+        )
+    )
+    val workoutMediaPacks: StateFlow<Map<String, ExerciseMediaPack>> = _workoutMediaPacks.asStateFlow()
 
     private val _recentSessions = MutableStateFlow<List<WorkoutSessionEntity>>(emptyList())
     val recentSessions: StateFlow<List<WorkoutSessionEntity>> = _recentSessions.asStateFlow()
@@ -255,7 +273,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 presageManager.setTelemetryEnabled(profile.smartSpectraTelemetryEnabled)
                 coachAgent.setAuthMode(
                     if (profile.preferLocalEdgeAi) AdkAuthMode.ON_DEVICE_EDGE
-                    else AdkAuthMode.FIREBASE_AI_LOGIC
+                    else AdkAuthMode.HYBRID_INFERENCE
                 )
             }
         }
@@ -399,11 +417,81 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
 
     /**
+     * Retrieves local procedure media immediately, then upgrades it in the
+     * background with Nano Banana imagery and a Gemini-synthesized walkthrough.
+     */
+    fun ensureMediaForExercise(exercise: String): ExerciseMediaPack {
+        val normalized = exercise.trim()
+        val existing = _workoutMediaPacks.value[normalized]
+        if (existing != null) {
+            requestMediaEnrichment(normalized, existing)
+            return existing
+        }
+
+        val fallback = WorkoutMediaGenerator.generateMediaForExercise(
+            exerciseName = normalized,
+            goal = _generatedWorkoutPlan.value.goal,
+            experienceLevel = _userProfile.value.experienceLevel
+        )
+        synchronized(workoutMediaPacksLock) {
+            _workoutMediaPacks.value = _workoutMediaPacks.value + (normalized to fallback)
+        }
+        requestMediaEnrichment(normalized, fallback)
+        return fallback
+    }
+
+    private fun requestMediaEnrichment(exercise: String, fallback: ExerciseMediaPack) {
+        if (_userProfile.value.preferLocalEdgeAi) return
+        if (fallback.mediaSource == WorkoutMediaSource.HYBRID_FIREBASE_AI_LOGIC) return
+        if (!mediaEnrichmentRequested.add(exercise)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val enriched = runCatching {
+                    workoutMediaCloudGenerator.enrichPack(
+                        pack = fallback,
+                        allowCloudMedia = !_userProfile.value.preferLocalEdgeAi
+                    )
+                }.onFailure { e ->
+                    Log.w(TAG, "Media enrichment failed for $exercise: ${e.message}")
+                }.getOrNull()
+                if (enriched != null && !_userProfile.value.preferLocalEdgeAi) {
+                    synchronized(workoutMediaPacksLock) {
+                        _workoutMediaPacks.value = _workoutMediaPacks.value + (exercise to enriched)
+                    }
+                }
+            } finally {
+                mediaEnrichmentRequested.remove(exercise)
+            }
+        }
+    }
+
+    private fun ensureMediaForExercises(exercises: List<String>) {
+        exercises.forEach { ensureMediaForExercise(it) }
+    }
+
+    /**
+     * Speaks a coaching narration cue through the audio coach.
+     */
+    fun speakNarration(cue: String) {
+        audioCoach.announcePhase(cue)
+    }
+
+    /**
+     * Updates theme preference (SYSTEM, LIGHT, DARK).
+     */
+    fun setThemePreference(theme: String) {
+        viewModelScope.launch {
+            userPrefsRepo.updateProfile(_userProfile.value.copy(themePreference = theme))
+        }
+    }
+
+    /**
      * Selects an exercise and starts a fresh workout session.
      */
     fun selectExercise(exercise: String) {
         val normalized = exercise.trim()
         if (normalized.isEmpty()) return
+        ensureMediaForExercise(normalized)
         val isometric = com.fitlens.app.workout.isIsometricExercise(normalized)
         completionSessionSaved = false
         lastWorkoutPhase = null
@@ -418,8 +506,9 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Generates a personalized AI workout routine via [FitnessCoachAgent] (with 100% offline
-     * edge fallback) and announces the coach plan.
+     * Generates a personalized AI workout routine via [FitnessCoachAgent] with Hybrid Inference
+     * (Cloud Firebase AI Logic + Edge Gemini Nano).
+     * During workout generation, synthesizes Nanobanana procedure steps and Gemini Omni video walkthroughs!
      */
     fun generateAiWorkoutPlan(
         goal: String,
@@ -429,6 +518,12 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     ) {
         if (_isGeneratingPlan.value) return
         _isGeneratingPlan.value = true
+        val preferLocalAi = _userProfile.value.preferLocalEdgeAi
+        _generationStatusMessage.value = if (preferLocalAi) {
+            "1/3 On-Device Edge synthesizing $goal routine..."
+        } else {
+            "1/3 Hybrid Inference: Firebase AI Logic synthesizing $goal routine..."
+        }
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val plan = coachAgent.requestWorkoutPlan(
@@ -438,13 +533,57 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     durationMinutes = durationMinutes
                 )
                 _generatedWorkoutPlan.value = plan
+                _generationStatusMessage.value = if (preferLocalAi) {
+                    "2/3 Synthesizing procedure graphics & biomechanics..."
+                } else {
+                    "2/3 Nanobanana generating procedure graphics & biomechanics..."
+                }
+                val missingExercises = plan.targetExercises.filter { exercise ->
+                    !_workoutMediaPacks.value.containsKey(exercise)
+                }
+                if (missingExercises.isNotEmpty()) {
+                    val fallbackPacks = WorkoutMediaGenerator.generateMediaForRoutine(
+                        exercises = missingExercises,
+                        goal = plan.goal,
+                        experienceLevel = experience
+                    )
+                    synchronized(workoutMediaPacksLock) {
+                        _workoutMediaPacks.value = _workoutMediaPacks.value + fallbackPacks
+                    }
+                }
+
+                val packsNeedingEnrichment = plan.targetExercises.mapNotNull { exercise ->
+                    _workoutMediaPacks.value[exercise]
+                        ?.takeIf {
+                            it.mediaSource != WorkoutMediaSource.HYBRID_FIREBASE_AI_LOGIC &&
+                                exercise !in mediaEnrichmentRequested
+                        }
+                        ?.let { exercise to it }
+                }.toMap()
+
+                _generationStatusMessage.value = if (preferLocalAi) {
+                    "3/3 Building interactive walkthrough demos..."
+                } else {
+                    "3/3 Gemini Omni building interactive walkthrough demos..."
+                }
+                if (packsNeedingEnrichment.isNotEmpty()) {
+                    val enrichedPacks = workoutMediaCloudGenerator.enrichRoutine(
+                        packs = packsNeedingEnrichment,
+                        allowCloudMedia = !preferLocalAi
+                    )
+                    synchronized(workoutMediaPacksLock) {
+                        _workoutMediaPacks.value = _workoutMediaPacks.value + enrichedPacks
+                    }
+                }
+
                 audioCoach.announcePhase(
-                    "AI Coach ready: ${plan.goal} workout with ${plan.targetExercises.size} exercises."
+                    "AI Coach ready: ${plan.goal} routine generated with Nanobanana procedure graphics and Gemini Omni interactive walkthroughs."
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "AI workout generation fallback: ${e.message}")
             } finally {
                 _isGeneratingPlan.value = false
+                _generationStatusMessage.value = null
             }
         }
     }
@@ -459,6 +598,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val firstEx = plan.targetExercises.firstOrNull() ?: "Bodyweight Squats"
         val isometric = com.fitlens.app.workout.isIsometricExercise(firstEx)
+        ensureMediaForExercises(plan.targetExercises)
         completionSessionSaved = false
         lastWorkoutPhase = null
         workoutManager.startRoutine(
