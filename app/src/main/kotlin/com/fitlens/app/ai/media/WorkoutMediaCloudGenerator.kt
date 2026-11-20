@@ -138,7 +138,7 @@ class WorkoutMediaCloudGenerator(
             append(pack.exerciseName)
             append(" showing a clear numbered ")
             append(pack.procedureSteps.size.coerceAtLeast(3))
-            append("-step sequence. Athletic educational fitness visual, consistent character, "
+            append("-step sequence. Athletic educational fitness visual, consistent character, " +
                 "clean studio lighting, precise joint alignment, subtle biomechanical highlights. ")
             append(stepSummary)
             append(" No text overlays, no watermark, no logos, safe-for-work content.")
