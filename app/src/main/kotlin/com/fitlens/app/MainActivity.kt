@@ -338,7 +338,7 @@ class MainActivity : ComponentActivity() {
             aiCoachingPrompt = aiCoachingPrompt,
             processingStatus = effectiveProcessingStatus,
             validationHint = validationStatus?.hint,
-            sdkErrorMessage = if (isSensingActive) null else sdkError?.message,
+            sdkErrorMessage = sdkError?.message,
             isPlaceholderPresageKey = viewModel.presageManager.isPlaceholderKey(),
             hasCameraPermission = hasCameraPerm,
             useFrontCamera = useFrontCamera,

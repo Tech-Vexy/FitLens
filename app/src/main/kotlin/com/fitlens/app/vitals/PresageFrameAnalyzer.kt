@@ -115,10 +115,21 @@ class PresageFrameAnalyzer(
      * Submits [imageProxy] to SmartSpectra without closing it, rewinding plane buffers
      * before and after so downstream analyzers (MediaPipe / Gemini Live) can also read the frame.
      */
+    @Volatile private var lastDiagLogAtMs = 0L
+
     fun submitFrameWithoutClosing(imageProxy: ImageProxy) {
         try {
             lastFrameSubmittedAtMs = System.currentTimeMillis()
             submittedFrameCount++
+            val diagNow = System.currentTimeMillis()
+            if (diagNow - lastDiagLogAtMs >= 5000L) {
+                lastDiagLogAtMs = diagNow
+                Log.d(
+                    TAG,
+                    "Frames submitted=$submittedFrameCount status=${SmartSpectraSdk.shared.processingStatus.value} " +
+                        "customInput=${customInput != null} fmt=${imageProxy.format} size=${imageProxy.width}x${imageProxy.height}"
+                )
+            }
             if (SmartSpectraSdk.shared.processingStatus.value != ProcessingStatus.RUNNING) {
                 return
             }

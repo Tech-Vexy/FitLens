@@ -154,7 +154,25 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    @Volatile private var metricsCallCount = 0L
+    @Volatile private var lastMetricsDiagAtMs = 0L
+
     private fun handleSdkMetrics(metrics: com.presagetech.smartspectra.proto.MetricsProto.Metrics) {
+        metricsCallCount++
+        val diagNow = System.currentTimeMillis()
+        if (diagNow - lastMetricsDiagAtMs >= 3000L) {
+            lastMetricsDiagAtMs = diagNow
+            Log.d(
+                TAG,
+                "SDK metrics #$metricsCallCount: cardio=${metrics.hasCardio()} " +
+                    "pulseN=${metrics.cardio.pulseRateCount} pulseLastTs=${metrics.cardio.pulseRateList.lastOrNull()?.timestamp} " +
+                    "hrvN=${metrics.cardio.hrvCount} traceN=${metrics.cardio.arterialPressureTraceCount} | " +
+                    "breathing=${metrics.hasBreathing()} brN=${metrics.breathing.rateCount} " +
+                    "upN=${metrics.breathing.upperTraceCount} | " +
+                    "face=${metrics.hasFace()} exprN=${metrics.face.expressionCount} | " +
+                    "mapped hr=$latestHr br=$latestBr hrv=$latestHrv expr=$latestExpression"
+            )
+        }
         var scalarChanged = false
         var hasNewTrace = false
 
@@ -253,11 +271,20 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         vitalsAnalyzer.updateValidationHint(hint)
     }
 
+    private var lastStatusLogged: Any? = null
+    private val sdkStatusObserver = Observer<com.presagetech.smartspectra.ProcessingStatus?> { status ->
+        if (status != null && status != lastStatusLogged) {
+            lastStatusLogged = status
+            Log.d(TAG, "SmartSpectra processingStatus -> $status")
+        }
+    }
+
     init {
         val sdk = SmartSpectraSdk.shared
         sdk.insight.observeForever(sdkInsightObserver)
         sdk.error.observeForever(sdkErrorObserver)
         sdk.validationStatus.observeForever(sdkValidationObserver)
+        sdk.processingStatus.observeForever(sdkStatusObserver)
 
         viewModelScope.launch {
             sdk.metricsFlow.collect { metrics ->
@@ -799,6 +826,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         sdk.insight.removeObserver(sdkInsightObserver)
         sdk.error.removeObserver(sdkErrorObserver)
         sdk.validationStatus.removeObserver(sdkValidationObserver)
+        sdk.processingStatus.removeObserver(sdkStatusObserver)
         vitalsAnalyzer.resetCustomInput()
         dualStreamAnalyzer.shutdown()
         liveAssistant.shutdown()

@@ -3,6 +3,7 @@ package com.fitlens.app.vitals
 import android.util.Log
 import com.fitlens.app.BuildConfig
 import com.presagetech.smartspectra.SmartSpectraConfig
+import com.presagetech.smartspectra.SmartSpectraLogLevel
 import com.presagetech.smartspectra.SmartSpectraSdk
 import com.presagetech.smartspectra.proto.MetricTypesProto.MetricType
 
@@ -63,6 +64,9 @@ class PresageManager {
 
         // Respect user's opt-out preference for aggregate diagnostic SDK telemetry
         sdk.config.enableTelemetry = enableTelemetry
+
+        // Surface SDK-native diagnostics (auth, frame acceptance, engine state) in logcat
+        sdk.config.logLevel = SmartSpectraLogLevel.DEBUG
 
         // Request the full cardio + breathing + expression metric bundle
         sdk.config.requestedMetrics =
