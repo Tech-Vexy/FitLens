@@ -213,7 +213,7 @@ class WorkoutMediaGeneratorTest {
     }
 
     @Test
-    fun `procedure steps have valid progress fractions from 0.0 to 1.0`() {
+    fun `procedure steps have valid progress fractions from zero to one`() {
         allExerciseNames.forEach { name ->
             val pack = WorkoutMediaGenerator.generateMediaForExercise(name)
             pack.procedureSteps.forEach { step ->
