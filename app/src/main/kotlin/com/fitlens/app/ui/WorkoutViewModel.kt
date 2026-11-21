@@ -506,8 +506,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Generates a personalized AI workout routine via [FitnessCoachAgent] with Hybrid Inference
-     * (Cloud Firebase AI Logic + Edge Gemini Nano).
+     * Generates a personalized AI workout routine via [FitnessCoachAgent].
      * During workout generation, synthesizes Nanobanana procedure steps and Gemini Omni video walkthroughs!
      */
     fun generateAiWorkoutPlan(
@@ -522,7 +521,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         _generationStatusMessage.value = if (preferLocalAi) {
             "1/3 On-Device Edge synthesizing $goal routine..."
         } else {
-            "1/3 Hybrid Inference: Firebase AI Logic synthesizing $goal routine..."
+            "1/3 AI synthesizing $goal routine..."
         }
         viewModelScope.launch(Dispatchers.Default) {
             try {

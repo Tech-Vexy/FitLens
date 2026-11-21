@@ -651,56 +651,6 @@ private fun TrainTabContent(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Hybrid Inference & Procedure Media Ready Badge
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = ACCENT_LIME.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, ACCENT_LIME.copy(alpha = 0.35f))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = null,
-                                tint = ACCENT_LIME,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Text(
-                                text = if (preferLocalEdgeAi) {
-                                    "ON-DEVICE EDGE AI"
-                                } else {
-                                    "HYBRID INFERENCE • FIREBASE AI LOGIC"
-                                },
-                                color = ACCENT_LIME,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 0.5.sp
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = ACCENT_SKY.copy(alpha = 0.18f)
-                        ) {
-                            Text(
-                                text = "NANOBANANA + OMNI",
-                                color = ACCENT_SKY,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-
                 // AI Generation In-Progress Banner
                 if (isGeneratingPlan || generationStatusMessage != null) {
                     Surface(
@@ -729,7 +679,7 @@ private fun TrainTabContent(
                                     letterSpacing = 1.sp
                                 )
                                 Text(
-                                    text = generationStatusMessage ?: "Hybrid AI generating procedure graphics & interactive walkthroughs...",
+                                    text = generationStatusMessage ?: "AI generating procedure graphics & interactive walkthroughs...",
                                     color = TEXT_PRIMARY,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium
