@@ -146,7 +146,7 @@ dependencies {
     // Kotlin Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // CameraX (1.6.0 required by SmartSpectra SDK 3.4.0 transitive dependency)
+    // CameraX (1.6.0 required by SmartSpectra SDK transitive dependency)
     val cameraxVersion = "1.6.0"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
@@ -158,7 +158,7 @@ dependencies {
 
 
     // Presage SmartSpectra Android SDK (Vitals & rPPG)
-    implementation("com.presagetech:smartspectra:3.4.0")
+    implementation("com.presagetech:smartspectra:3.5.0")
 
 
     // Firebase AI Logic & App Check (Zero AI Key Protection)

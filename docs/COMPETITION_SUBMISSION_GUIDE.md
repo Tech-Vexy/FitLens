@@ -29,7 +29,7 @@ Record on a physical Android phone in good front-facing light so judges clearly 
 
 ## ✅ Pre-Submission Checklist (`#presagechallenge` Rules)
 
-- [x] **Functional SmartSpectra SDK integration** (`com.presagetech:smartspectra:3.4.0` via `useCustomInput()`) responding in real time to **Pulse**, **Breathing Rate**, **HRV RMSSD**, and **Facial Expressions**, plus `validationStatus` and `sdk.insight`.
+- [x] **Functional SmartSpectra SDK integration** (`com.presagetech:smartspectra:3.5.0` via `useCustomInput()`) responding in real time to **Pulse**, **Breathing Rate**, **HRV RMSSD**, and **Facial Expressions**, plus `validationStatus` and `sdk.insight`.
 - [x] **Consent & Data Handling complete** both in-app ([`ConsentAndPrivacySheet.kt`](app/src/main/kotlin/com/fitlens/app/ui/ConsentAndPrivacySheet.kt)), in [`README.md`](README.md), and in the DEV post ([`docs/DEV_SUBMISSION_POST.md`](docs/DEV_SUBMISSION_POST.md)).
 - [x] **Strict non-medical wellness framing**—zero diagnosis, treatment, or clinical decision-making claims; zero covert or pre-consent monitoring.
 - [x] **Demo uses live camera signals** on a physical Android device for the SmartSpectra portion; simulation controls are clearly separated for testing.
