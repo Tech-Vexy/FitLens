@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val AUTO_RECOVER_MIN_UPTIME_MS = 15_000L
     }
 
     private val sdk by lazy { SmartSpectraSdk.shared }
@@ -52,6 +53,13 @@ class MainActivity : ComponentActivity() {
     private val hasCameraPermissionState = mutableStateOf(false)
     private var resumeSensingAfterPause = false
     private var userManuallyStoppedSensing = false
+
+    // Model artifacts (phasic-bp, expressions, ...) download+decrypt asynchronously
+    // after start() returns. Restarting the SDK while that fetch is in flight cancels
+    // it ("Artifact request cancelled" / "Device pairing cancelled"), so auto-recover
+    // must not fire until a start has had time to settle.
+    private var lastSdkStartLaunchedAtMs = 0L
+    private var autoRecoverAttempts = 0
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -129,7 +137,7 @@ class MainActivity : ComponentActivity() {
             workoutViewModel.userProfile.value.hasAcceptedSensingConsent &&
             hasCameraPermissionState.value
         ) {
-            startMeasurement(clearPreviousReadings = false)
+            startMeasurement(clearPreviousReadings = false, allowAutoRecover = true)
         }
     }
 
@@ -189,7 +197,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startMeasurement(clearPreviousReadings: Boolean = true) {
+    private fun startMeasurement(clearPreviousReadings: Boolean = true, allowAutoRecover: Boolean = false) {
         if (!workoutViewModel.userProfile.value.hasAcceptedSensingConsent) return
         userManuallyStoppedSensing = false
         workoutViewModel.setSensingActive(true)
@@ -201,6 +209,17 @@ class MainActivity : ComponentActivity() {
                     sdk.processingStatus.value == ProcessingStatus.STOPPING
                 ) {
                     return@withLock
+                }
+                // Auto-recover only: a recent start may still be downloading models
+                // in the background; restarting now would cancel those fetches.
+                if (allowAutoRecover &&
+                    System.currentTimeMillis() - lastSdkStartLaunchedAtMs < AUTO_RECOVER_MIN_UPTIME_MS
+                ) {
+                    return@withLock
+                }
+                lastSdkStartLaunchedAtMs = System.currentTimeMillis()
+                if (!allowAutoRecover) {
+                    autoRecoverAttempts = 0
                 }
                 runCatching {
                     if (clearPreviousReadings) {
@@ -272,23 +291,33 @@ class MainActivity : ComponentActivity() {
                 !isSensingActive &&
                 !userManuallyStoppedSensing
             ) {
-                startMeasurement(clearPreviousReadings = false)
+                startMeasurement(clearPreviousReadings = false, allowAutoRecover = true)
             }
         }
 
-        // Auto-recover if SmartSpectra stops or enters ERROR while sensing is active
+        // Auto-recover if SmartSpectra stops or enters ERROR while sensing is active.
+        // Backoff + minimum uptime guard: restarting while the SDK is still fetching
+        // model artifacts cancels those downloads, so wait for the last start to
+        // settle before trying again.
         LaunchedEffect(isSensingActive, processingStatus, profile.hasAcceptedSensingConsent, hasCameraPerm) {
+            if (processingStatus == ProcessingStatus.RUNNING) {
+                autoRecoverAttempts = 0
+            }
             if (isSensingActive &&
                 profile.hasAcceptedSensingConsent &&
                 hasCameraPerm &&
                 (processingStatus == ProcessingStatus.ERROR || processingStatus == ProcessingStatus.IDLE)
             ) {
-                kotlinx.coroutines.delay(1200L)
+                val uptimeRemaining = AUTO_RECOVER_MIN_UPTIME_MS -
+                    (System.currentTimeMillis() - lastSdkStartLaunchedAtMs)
+                val backoffMs = 1200L shl autoRecoverAttempts.coerceAtMost(3)
+                kotlinx.coroutines.delay(maxOf(uptimeRemaining, backoffMs).coerceAtLeast(0L))
                 if (viewModel.isSensingActive.value &&
                     profile.hasAcceptedSensingConsent &&
                     hasCameraPerm
                 ) {
-                    startMeasurement(clearPreviousReadings = false)
+                    autoRecoverAttempts++
+                    startMeasurement(clearPreviousReadings = false, allowAutoRecover = true)
                 }
             }
         }
