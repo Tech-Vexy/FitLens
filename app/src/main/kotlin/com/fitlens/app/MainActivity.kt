@@ -44,7 +44,14 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val AUTO_RECOVER_MIN_UPTIME_MS = 15_000L
+        // Model artifacts (phasic-bp-inference) can take 30+ seconds to download on
+        // throttled networks. The SDK's low-FPS watchdog fires at ~18 seconds, so
+        // auto-recover must not fire until well after the download window has closed.
+        private const val AUTO_RECOVER_MIN_UPTIME_MS = 45_000L
+        // Cap auto-recover attempts to prevent infinite restart loops when the model
+        // download consistently fails (e.g., no network). After this many attempts,
+        // stop retrying until the user explicitly restarts sensing.
+        private const val MAX_AUTO_RECOVER_ATTEMPTS = 2
     }
 
     private val sdk by lazy { SmartSpectraSdk.shared }
@@ -225,6 +232,12 @@ class MainActivity : ComponentActivity() {
                 if (allowAutoRecover &&
                     System.currentTimeMillis() - lastSdkStartLaunchedAtMs < AUTO_RECOVER_MIN_UPTIME_MS
                 ) {
+                    return@withLock
+                }
+                // Cap auto-recover attempts to prevent infinite restart loops.
+                if (allowAutoRecover && autoRecoverAttempts >= MAX_AUTO_RECOVER_ATTEMPTS) {
+                    Log.w(TAG, "Auto-recover attempts exhausted ($MAX_AUTO_RECOVER_ATTEMPTS) — stopping retries.")
+                    workoutViewModel.setSensingActive(false)
                     return@withLock
                 }
                 lastSdkStartLaunchedAtMs = System.currentTimeMillis()

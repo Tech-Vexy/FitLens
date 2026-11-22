@@ -279,6 +279,17 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         if (status != null && status != lastStatusLogged) {
             lastStatusLogged = status
             Log.d(TAG, "SmartSpectra processingStatus -> $status")
+            // Wire SDK lifecycle to frame analyzer's stopped-state guard so frame
+            // forwarding stops immediately when the low-FPS watchdog (error 14) kills
+            // the session, and resumes when a new session starts.
+            when (status) {
+                com.presagetech.smartspectra.ProcessingStatus.RUNNING ->
+                    vitalsAnalyzer.markSdkStarted()
+                com.presagetech.smartspectra.ProcessingStatus.ERROR,
+                com.presagetech.smartspectra.ProcessingStatus.IDLE ->
+                    vitalsAnalyzer.markSdkStopped()
+                else -> Unit
+            }
         }
     }
 

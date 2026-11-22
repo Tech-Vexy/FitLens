@@ -4,6 +4,7 @@ import android.util.Log
 import com.fitlens.app.BuildConfig
 import com.presagetech.smartspectra.SmartSpectraConfig
 import com.presagetech.smartspectra.SmartSpectraSdk
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Initializes and configures Presage SmartSpectra SDK.
@@ -44,8 +45,20 @@ class PresageManager {
         return key
     }
 
+    companion object {
+        private const val TAG = "PresageManager"
+        const val PLACEHOLDER_KEY = "PLACEHOLDER_RUN_SETUP"
+
+        private val initialized = AtomicBoolean(false)
+    }
+
     /**
      * Configures SmartSpectraSdk.shared with the API key, telemetry preference, and metrics.
+     *
+     * This method is strictly idempotent — calling it multiple times is a no-op after
+     * the first successful initialization. This prevents Compose recompositions or
+     * error callbacks from re-configuring the SDK mid-session, which would cancel
+     * in-flight model artifact downloads ("Artifact request cancelled").
      *
      * Note: We use the custom input (headless) mode — the SDK's built-in camera is NOT
      * used. CameraX provides the preview and ImageAnalysis, and frames are forwarded
@@ -53,6 +66,12 @@ class PresageManager {
      * between SmartSpectra and MediaPipe.
      */
     fun initializeSdk(enableTelemetry: Boolean = true) {
+        // Idempotent guard: only configure once per process lifetime.
+        if (!initialized.compareAndSet(false, true)) {
+            Log.d(TAG, "SmartSpectraSdk already initialized — skipping duplicate call.")
+            return
+        }
+
         val sdk = SmartSpectraSdk.shared
         sdk.config.apiKey = getApiKey()
 

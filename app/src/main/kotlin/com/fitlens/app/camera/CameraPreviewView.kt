@@ -79,10 +79,12 @@ fun CameraPreviewView(
                 val targetFpsRange = selectTargetFpsRange(context, useFrontCamera)
                 val displayRotation = previewView.display?.rotation ?: Surface.ROTATION_0
 
+                // SmartSpectra custom input (demo-app) uses 640x480 to keep frame
+                // conversion lightweight while preserving enough resolution for rPPG.
                 val resolutionSelector = ResolutionSelector.Builder()
                     .setResolutionStrategy(
                         ResolutionStrategy(
-                            Size(720, 1280),
+                            Size(640, 480),
                             ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
                         )
                     )
@@ -99,13 +101,13 @@ fun CameraPreviewView(
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-                // Match SmartSpectra's CameraXCapturePipeline contract:
-                // 720x1280 upright rotated YUV_420_888 frames at >=25-30 fps.
+                // SmartSpectra custom input requires RGBA_8888 Bitmap frames (not YUV_420_888).
+                // demo-app uses 640x480 to keep frame conversion lightweight while preserving
+                // enough resolution for rPPG skin-pulse detection.
                 val analysisBuilder = ImageAnalysis.Builder()
                     .setResolutionSelector(resolutionSelector)
                     .setTargetRotation(displayRotation)
-                    .setOutputImageRotationEnabled(true)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 targetFpsRange?.let { fps ->
                     Camera2Interop.Extender(analysisBuilder)

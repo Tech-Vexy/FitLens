@@ -1,5 +1,8 @@
 package com.fitlens.app.vitals
 
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.os.SystemClock
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -79,6 +82,8 @@ class PresageFrameAnalyzer(
         private set
     @Volatile var submittedFrameCount: Long = 0L
         private set
+    @Volatile private var lastTimestampMs: Long = 0L
+    @Volatile private var sdkStopped = false
 
     // -----------------------------------------------------------------------
     // Camera frame submission
@@ -96,11 +101,20 @@ class PresageFrameAnalyzer(
     }
 
     /**
-     * Obtains a fresh [CustomInput] handle. Must be called while the SDK is stopped
-     * (before [SmartSpectraSdk.start]), per the SmartSpectra headless-mode contract.
+     * Obtains a [CustomInput] handle once per session.
+     *
+     * Per the SmartSpectra demo-app pattern, useCustomInput() is called exactly once
+     * when entering custom mode — never inside a per-frame callback or Compose
+     * recomposition block. Repeated calls while the SDK is starting can cancel the
+     * in-flight model artifact download ("Artifact request cancelled").
+     *
+     * If a valid handle already exists, returns it immediately without re-creating.
      * Automatically resets the SDK if a previous session left it in ERROR state.
      */
     suspend fun ensureCustomInput(): com.presagetech.smartspectra.CustomInput {
+        // Reuse existing handle — avoids cancelling in-flight model downloads.
+        customInput?.let { return it }
+
         val sdk = SmartSpectraSdk.shared
         val status = sdk.processingStatus.value
         if (status != null && status != ProcessingStatus.IDLE) {
@@ -108,14 +122,37 @@ class PresageFrameAnalyzer(
         }
         return sdk.useCustomInput(frameTransform).also {
             customInput = it
+            Log.d(TAG, "CustomInput handle created (transform=$frameTransform)")
         }
     }
 
     /**
-     * Submits [imageProxy] to SmartSpectra without closing it, rewinding plane buffers
-     * before and after so downstream analyzers (MediaPipe / Gemini Live) can also read the frame.
+     * Submits [imageProxy] to SmartSpectra as an RGBA_8888 Bitmap with a monotonic
+     * timestamp, matching the demo-app custom-input pipeline.
+     *
+     * CameraX must be configured with OUTPUT_IMAGE_FORMAT_RGBA_8888 so that
+     * [ImageProxy.toBitmap] returns a usable Bitmap rather than a YUV conversion.
+     *
+     * The frame is NOT closed here — the caller (DualStreamAnalyzer) owns the
+     * [ImageProxy] lifecycle and closes it after all consumers are done.
      */
     @Volatile private var lastDiagLogAtMs = 0L
+
+    /**
+     * Called when SmartSpectra emits a stopped/error state (e.g., error 14 — low-FPS watchdog).
+     * Stops forwarding frames immediately so the SDK doesn't spam "Failed to process input video frame".
+     */
+    fun markSdkStopped() {
+        sdkStopped = true
+    }
+
+    /**
+     * Resets the stopped flag when a new SDK session starts.
+     */
+    fun markSdkStarted() {
+        sdkStopped = false
+        lastTimestampMs = 0L
+    }
 
     fun submitFrameWithoutClosing(imageProxy: ImageProxy) {
         try {
@@ -130,26 +167,59 @@ class PresageFrameAnalyzer(
                         "customInput=${customInput != null} fmt=${imageProxy.format} size=${imageProxy.width}x${imageProxy.height}"
                 )
             }
-            if (SmartSpectraSdk.shared.processingStatus.value != ProcessingStatus.RUNNING) {
+
+            // Stop forwarding frames as soon as SmartSpectra emits a stopped/error state
+            // (e.g., error 14 — low-FPS watchdog) so it doesn't spam "Failed to process input video frame".
+            if (sdkStopped) {
+                return
+            }
+
+            val status = SmartSpectraSdk.shared.processingStatus.value
+            if (status != ProcessingStatus.RUNNING) {
+                if (status == ProcessingStatus.ERROR || status == ProcessingStatus.IDLE) {
+                    sdkStopped = true
+                }
                 return
             }
 
             val input = customInput ?: return
-            for (plane in imageProxy.planes) {
-                runCatching { plane.buffer.rewind() }
+
+            // Convert ImageProxy to Bitmap (RGBA_8888 from CameraX) and apply rotation
+            // so the SDK receives an upright frame, matching demo-app's pattern.
+            val bitmap = runCatching {
+                val raw = imageProxy.toBitmap()
+                val rotation = imageProxy.imageInfo.rotationDegrees
+                if (rotation == 0) {
+                    raw
+                } else {
+                    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+                    val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+                    raw.recycle()
+                    rotated
+                }
+            }.getOrNull() ?: return
+
+            // Use CameraX frame timestamp in milliseconds (strictly monotonic).
+            // CameraX provides nanosecond timestamps; convert to milliseconds.
+            // Drop frames whose timestamp is not strictly greater than the previous one
+            // to avoid NON_MONOTONIC_TIMESTAMP / TIMESTAMP_GAP rejections.
+            val timestampMs = imageProxy.imageInfo.timestamp / 1_000_000L
+            if (timestampMs <= lastTimestampMs) {
+                Log.v(TAG, "Dropping frame with non-monotonic timestamp: $timestampMs <= $lastTimestampMs")
+                bitmap.recycle()
+                return
             }
-            when (val result = input.sendFrame(imageProxy)) {
+            lastTimestampMs = timestampMs
+
+            when (val result = input.sendFrame(bitmap, timestampMs)) {
                 is FrameSubmissionResult.Accepted -> Unit
                 is FrameSubmissionResult.Rejected -> {
                     Log.w(TAG, "Frame rejected: ${result.error}")
                 }
             }
+            bitmap.recycle()
         } catch (e: Exception) {
             Log.v(TAG, "sendFrame skipped: ${e.message}")
-        } finally {
-            for (plane in imageProxy.planes) {
-                runCatching { plane.buffer.rewind() }
-            }
         }
     }
 
