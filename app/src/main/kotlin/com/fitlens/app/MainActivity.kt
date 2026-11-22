@@ -111,6 +111,18 @@ class MainActivity : ComponentActivity() {
             enableTelemetry = workoutViewModel.userProfile.value.smartSpectraTelemetryEnabled
         )
 
+        lifecycleScope.launch {
+            runCatching {
+                val readiness = sdk.checkDeviceReadiness()
+                Log.i(
+                    TAG,
+                    "SmartSpectra device readiness: ${readiness.verdict} — ${readiness.reason}"
+                )
+            }.onFailure { e ->
+                Log.e(TAG, "SmartSpectra device readiness check failed", e)
+            }
+        }
+
         setContent {
             val userProfile by workoutViewModel.userProfile.collectAsState()
             val isDark = when (userProfile.themePreference) {
@@ -147,7 +159,13 @@ class MainActivity : ComponentActivity() {
             workoutViewModel.isSensingActive.value ||
                 sdk.processingStatus.value == ProcessingStatus.RUNNING ||
                 sdk.processingStatus.value == ProcessingStatus.STARTING
-        stopMeasurement(userInitiated = false)
+        // STARTING covers device pairing and encrypted model-artifact fetches.
+        // Stopping now cancels them ("Artifact request cancelled" /
+        // "Device pairing cancelled") and the restart can hit
+        // "model load already in progress" timeouts, so let provisioning finish.
+        if (sdk.processingStatus.value != ProcessingStatus.STARTING) {
+            stopMeasurement(userInitiated = false)
+        }
         workoutViewModel.stopLiveVoiceAssistant()
     }
 

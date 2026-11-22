@@ -262,7 +262,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
 
     private val sdkErrorObserver = Observer<com.presagetech.smartspectra.SmartSpectraError?> { error ->
         if (error != null) {
-            Log.e(TAG, "SmartSpectra SDK error: ${error.message}")
+            Log.e(
+                TAG,
+                "SmartSpectra SDK error [${error.code}] retryable=${error.retryable}: ${error.message}"
+            )
         }
     }
 

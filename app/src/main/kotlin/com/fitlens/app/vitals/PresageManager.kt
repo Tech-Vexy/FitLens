@@ -4,7 +4,6 @@ import android.util.Log
 import com.fitlens.app.BuildConfig
 import com.presagetech.smartspectra.SmartSpectraConfig
 import com.presagetech.smartspectra.SmartSpectraSdk
-import com.presagetech.smartspectra.proto.MetricTypesProto.MetricType
 
 /**
  * Initializes and configures Presage SmartSpectra SDK.
@@ -15,7 +14,7 @@ import com.presagetech.smartspectra.proto.MetricTypesProto.MetricType
  * Requested metrics:
  *   • SmartSpectraConfig.cardioMetrics  (pulse rate, HRV, arterial pressure trace)
  *   • SmartSpectraConfig.breathingMetrics (respiratory rate, chest/abdomen waveforms)
- *   • MetricType.EXPRESSIONS (facial expression classification)
+ *   • SmartSpectraConfig.faceMetrics    (landmarks, blinking, talking, expressions)
  */
 class PresageManager {
 
@@ -64,15 +63,16 @@ class PresageManager {
         // Respect user's opt-out preference for aggregate diagnostic SDK telemetry
         sdk.config.enableTelemetry = enableTelemetry
 
-        // Request the full cardio + breathing + expression metric bundle
+        // Request the full cardio + breathing + face metric bundle
+        // (faceMetrics includes EXPRESSIONS plus landmarks/blinking/talking)
         sdk.config.requestedMetrics =
             SmartSpectraConfig.cardioMetrics +
             SmartSpectraConfig.breathingMetrics +
-            listOf(MetricType.EXPRESSIONS)
+            SmartSpectraConfig.faceMetrics
 
         Log.i(
             TAG,
-            "SmartSpectraSdk initialized (v${sdk.version}, cardio + breathing + expressions, telemetry=$enableTelemetry)."
+            "SmartSpectraSdk initialized (v${sdk.version}, cardio + breathing + face, telemetry=$enableTelemetry)."
         )
     }
 
