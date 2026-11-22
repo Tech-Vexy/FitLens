@@ -21,6 +21,7 @@ class PresageManager {
     companion object {
         private const val TAG = "PresageManager"
         const val PLACEHOLDER_KEY = "PLACEHOLDER_RUN_SETUP"
+        private val initialized = AtomicBoolean(false)
     }
 
     /**
@@ -43,13 +44,6 @@ class PresageManager {
             Log.d(TAG, "PRESAGE_API_KEY resolved (${key.take(4)}…${key.takeLast(4)}).")
         }
         return key
-    }
-
-    companion object {
-        private const val TAG = "PresageManager"
-        const val PLACEHOLDER_KEY = "PLACEHOLDER_RUN_SETUP"
-
-        private val initialized = AtomicBoolean(false)
     }
 
     /**
