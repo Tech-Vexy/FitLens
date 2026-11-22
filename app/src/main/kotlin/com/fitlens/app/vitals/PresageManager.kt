@@ -14,7 +14,6 @@ import com.presagetech.smartspectra.SmartSpectraSdk
  * Requested metrics:
  *   • SmartSpectraConfig.cardioMetrics  (pulse rate, HRV, arterial pressure trace)
  *   • SmartSpectraConfig.breathingMetrics (respiratory rate, chest/abdomen waveforms)
- *   • SmartSpectraConfig.faceMetrics    (landmarks, blinking, talking, expressions)
  */
 class PresageManager {
 
@@ -63,16 +62,16 @@ class PresageManager {
         // Respect user's opt-out preference for aggregate diagnostic SDK telemetry
         sdk.config.enableTelemetry = enableTelemetry
 
-        // Request the full cardio + breathing + face metric bundle
-        // (faceMetrics includes EXPRESSIONS plus landmarks/blinking/talking)
+        // Cardio + breathing only. The face bundle (landmarks/expressions) is
+        // intentionally excluded: it requires the expressions-inference model
+        // artifact and isn't needed for workout vitals.
         sdk.config.requestedMetrics =
             SmartSpectraConfig.cardioMetrics +
-            SmartSpectraConfig.breathingMetrics +
-            SmartSpectraConfig.faceMetrics
+            SmartSpectraConfig.breathingMetrics
 
         Log.i(
             TAG,
-            "SmartSpectraSdk initialized (v${sdk.version}, cardio + breathing + face, telemetry=$enableTelemetry)."
+            "SmartSpectraSdk initialized (v${sdk.version}, cardio + breathing, telemetry=$enableTelemetry)."
         )
     }
 

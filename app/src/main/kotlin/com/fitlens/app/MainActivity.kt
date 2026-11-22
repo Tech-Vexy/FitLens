@@ -111,17 +111,9 @@ class MainActivity : ComponentActivity() {
             enableTelemetry = workoutViewModel.userProfile.value.smartSpectraTelemetryEnabled
         )
 
-        lifecycleScope.launch {
-            runCatching {
-                val readiness = sdk.checkDeviceReadiness()
-                Log.i(
-                    TAG,
-                    "SmartSpectra device readiness: ${readiness.verdict} — ${readiness.reason}"
-                )
-            }.onFailure { e ->
-                Log.e(TAG, "SmartSpectra device readiness check failed", e)
-            }
-        }
+        // NOTE: sdk.checkDeviceReadiness() is intentionally NOT called here — it
+        // opens the NDK camera for its own test, which collides with the CameraX
+        // pipeline and makes useCustomInput() throw "Device readiness is running".
 
         setContent {
             val userProfile by workoutViewModel.userProfile.collectAsState()
