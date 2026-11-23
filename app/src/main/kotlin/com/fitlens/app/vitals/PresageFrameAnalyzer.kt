@@ -82,7 +82,7 @@ class PresageFrameAnalyzer(
         private set
     @Volatile var submittedFrameCount: Long = 0L
         private set
-    @Volatile private var lastTimestampMs: Long = 0L
+    @Volatile private var lastTimestampUs: Long = 0L
     @Volatile private var sdkStopped = false
 
     // -----------------------------------------------------------------------
@@ -151,7 +151,7 @@ class PresageFrameAnalyzer(
      */
     fun markSdkStarted() {
         sdkStopped = false
-        lastTimestampMs = 0L
+        lastTimestampUs = 0L
     }
 
     fun submitFrameWithoutClosing(imageProxy: ImageProxy) {
@@ -199,19 +199,19 @@ class PresageFrameAnalyzer(
                 }
             }.getOrNull() ?: return
 
-            // Use CameraX frame timestamp in milliseconds (strictly monotonic).
-            // CameraX provides nanosecond timestamps; convert to milliseconds.
+            // Use the CameraX frame timestamp in microseconds (strictly monotonic).
+            // CameraX provides nanosecond timestamps; sendFrame() expects microseconds.
             // Drop frames whose timestamp is not strictly greater than the previous one
             // to avoid NON_MONOTONIC_TIMESTAMP / TIMESTAMP_GAP rejections.
-            val timestampMs = imageProxy.imageInfo.timestamp / 1_000_000L
-            if (timestampMs <= lastTimestampMs) {
-                Log.v(TAG, "Dropping frame with non-monotonic timestamp: $timestampMs <= $lastTimestampMs")
+            val timestampUs = imageProxy.imageInfo.timestamp / 1_000_000L
+            if (timestampUs <= lastTimestampUs) {
+                Log.v(TAG, "Dropping frame with non-monotonic timestamp: $timestampUs <= $lastTimestampUs")
                 bitmap.recycle()
                 return
             }
-            lastTimestampMs = timestampMs
+            lastTimestampUs = timestampUs
 
-            when (val result = input.sendFrame(bitmap, timestampMs)) {
+            when (val result = input.sendFrame(bitmap, timestampUs)) {
                 is FrameSubmissionResult.Accepted -> Unit
                 is FrameSubmissionResult.Rejected -> {
                     Log.w(TAG, "Frame rejected: ${result.error}")

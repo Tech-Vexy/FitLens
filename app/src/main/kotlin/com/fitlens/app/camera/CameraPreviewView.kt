@@ -81,7 +81,7 @@ fun CameraPreviewView(
 
                 // SmartSpectra custom input (demo-app) uses 640x480 to keep frame
                 // conversion lightweight while preserving enough resolution for rPPG.
-                val resolutionSelector = ResolutionSelector.Builder()
+                val previewResolutionSelector = ResolutionSelector.Builder()
                     .setResolutionStrategy(
                         ResolutionStrategy(
                             Size(640, 480),
@@ -90,8 +90,20 @@ fun CameraPreviewView(
                     )
                     .build()
 
+                // The device may be propped several meters from the user during a
+                // workout, so the analysis stream needs enough pixels for the face
+                // ROI to stay detectable for rPPG. The preview stays at 640x480.
+                val analysisResolutionSelector = ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(1280, 720),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                        )
+                    )
+                    .build()
+
                 val previewBuilder = Preview.Builder()
-                    .setResolutionSelector(resolutionSelector)
+                    .setResolutionSelector(previewResolutionSelector)
                     .setTargetRotation(displayRotation)
                 targetFpsRange?.let { fps ->
                     Camera2Interop.Extender(previewBuilder)
@@ -102,10 +114,10 @@ fun CameraPreviewView(
                 }
 
                 // SmartSpectra custom input requires RGBA_8888 Bitmap frames (not YUV_420_888).
-                // demo-app uses 640x480 to keep frame conversion lightweight while preserving
-                // enough resolution for rPPG skin-pulse detection.
+                // 1280x720 keeps enough skin-pixel detail for rPPG when the phone is
+                // propped several meters from the user's face.
                 val analysisBuilder = ImageAnalysis.Builder()
-                    .setResolutionSelector(resolutionSelector)
+                    .setResolutionSelector(analysisResolutionSelector)
                     .setTargetRotation(displayRotation)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
